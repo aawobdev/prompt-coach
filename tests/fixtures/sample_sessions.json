@@ -1,1 +1,66 @@
-[]
+[
+  {
+    "session_id": "vague-1",
+    "title": "Vague one-liner",
+    "timestamp": "2026-07-01T09:00:00Z",
+    "messages": [
+      {"role": "user", "content": "make the dashboard better"},
+      {"role": "assistant", "content": "Could you clarify what aspect?"}
+    ]
+  },
+  {
+    "session_id": "explicit-1",
+    "title": "Explicit prompt with contract and example",
+    "timestamp": "2026-07-02T10:30:00Z",
+    "messages": [
+      {"role": "user", "content": "Write a Python function `slugify(title: str) -> str` in src/utils/text.py. Requirements: lowercase, spaces and underscores become hyphens, strip non-alphanumerics, collapse repeated hyphens, max 80 chars. Output only the function with a docstring, no prose. Example: slugify('Hello_World! 2x') == 'hello-world-2x'. Constraint: stdlib only, because this module must stay dependency-free."},
+      {"role": "assistant", "content": "def slugify(...): ..."}
+    ]
+  },
+  {
+    "session_id": "wall-1",
+    "title": "Long unstructured wall",
+    "timestamp": "2026-07-03T14:00:00Z",
+    "messages": [
+      {"role": "user", "content": "so I have this app and it has a login page and sometimes users complain that they get logged out and I think it might be the session cookie but also we changed the deploy last week and there was that nginx thing and also the mobile app uses a different auth path and I was wondering if maybe we should just rewrite the whole auth system or maybe switch to JWTs but then again the refresh token flow confused me last time and anyway what do you think we should do about the logout issue and also while you are at it can you look at why the avatar images are slow"}
+    ]
+  },
+  {
+    "session_id": "iterate-1",
+    "title": "Iterative refinement chain",
+    "timestamp": "2026-07-04T16:00:00Z",
+    "messages": [
+      {"role": "user", "content": "Write a SQL query that returns the top 10 customers by total order value."},
+      {"role": "assistant", "content": "SELECT ..."},
+      {"role": "user", "content": "Good, but exclude cancelled orders and group by calendar month."},
+      {"role": "assistant", "content": "SELECT ..."},
+      {"role": "user", "content": "Now return it as a CTE I can reuse, and add the customer email column."}
+    ]
+  },
+  {
+    "session_id": "machine-1",
+    "title": "Machine task spec",
+    "timestamp": "2026-07-05T11:00:00Z",
+    "messages": [
+      {"role": "user", "content": "TASK: create Customer CRUD at src/app/api/v1/customers/route.ts\n\nProject context: Next.js 16, Prisma, PostgreSQL.\nOutput: route.ts with GET (list, paginated) and POST (create) handlers, Zod validation.\nVerify: curl http://localhost:3000/api/v1/customers returns a JSON array."}
+    ]
+  },
+  {
+    "session_id": "structured-1",
+    "title": "Structured output request",
+    "timestamp": "2026-07-06T13:00:00Z",
+    "messages": [
+      {"role": "user", "content": "Compare Postgres, MySQL and SQLite for a single-user local analytics tool. Return a markdown table with columns: engine, setup burden, concurrency model, FTS support, verdict. One sentence per cell, then a two-sentence recommendation."}
+    ]
+  },
+  {
+    "session_id": "context-1",
+    "title": "Good context, no example",
+    "timestamp": "2026-07-07T08:15:00Z",
+    "messages": [
+      {"role": "user", "content": "In the attached FastAPI app, requests to /v1/reports intermittently 502 behind nginx. The app logs show the worker finishing in 45s; nginx proxy_read_timeout is 30s because the default was never changed. Propose the minimal fix and say why raising the timeout beats streaming here."},
+      {"role": "assistant", "content": "Raise proxy_read_timeout..."},
+      {"role": "user", "content": "Apply the same reasoning to the /v1/exports endpoint."}
+    ]
+  }
+]
