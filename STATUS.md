@@ -1,6 +1,22 @@
 # Project Status - prompt-coach
-Last updated: 2026-07-20 by Architect (Claude, Fable 5): phase 2 scoped and
-starting (Copilot store, ChatGPT export import, dash); phase 1 complete
+Last updated: 2026-07-20 by Claude (Fable 5), daily wrap-up: phases 1 and 2
+both complete and gated in a single day (blueprint v2 rewrite through dash)
+
+## Next session pick-up list
+
+1. Live-LLM smoke (needs desktop Ollama on):
+   `uv run prompt-coach report --since 7d --sample 20` - verify rubric judge
+   and patterns render; check the model's effective num_ctx before raising
+   batch sizes.
+2. ChatGPT importer verification: run `prompt-coach import <export.zip>`
+   against a real export, then clear the UNVERIFIED markers here and in
+   BLUEPRINT.md section 16.2.
+3. Optional UX: sync throttle or --no-sync flag (dash pays ~17s of /mnt/c
+   stat overhead per run).
+4. Optional: machine-prompt classifier misses cron-generated curator prompts
+   ("You are curating..."); refine if the machine segment matters more.
+5. Phase 3 candidates (blueprint section 15): trends over time, serve API,
+   OpenWebUI store, weekly coaching report via Hermes cron.
 
 ## Phase 2 task status
 

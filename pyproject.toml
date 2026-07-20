@@ -1,7 +1,7 @@
 [project]
 name = "prompt-coach"
 version = "0.1.0"
-description = "Local-first, privacy-preserving personal prompt coach — analyses your prompt history via local AI and gives you coaching insights."
+description = "Local-first, privacy-preserving personal prompt coach: analyses your prompt history via local AI and gives you coaching insights."
 requires-python = ">=3.12"
 dependencies = [
     "typer>=0.15,<0.16",
