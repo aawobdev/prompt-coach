@@ -3,11 +3,12 @@
 **Your personal prompting analyst. Runs locally. Zero data export.**
 
 A CLI tool that reads your own prompt history from the session stores already
-on your machine (Hermes `state.db`, Claude Code transcripts), analyses your
-prompting style, and produces a coaching report: style metrics, scores against
-the prompting-standards rubric, and LLM-detected patterns. Prompt content
-never leaves your machine; analysis runs on a local Ollama model, and the tool
-still works (deterministic analysis only) when no model is reachable.
+on your machine (Hermes `state.db`, Claude Code transcripts, Copilot Chat
+sessions, ChatGPT data exports), analyses your prompting style, and produces a
+coaching report: style metrics, scores against the prompting-standards rubric,
+and LLM-detected patterns. Prompt content never leaves your machine; analysis
+runs on a local Ollama model, and the tool still works (deterministic analysis
+only) when no model is reachable.
 
 ## Quick start
 
@@ -16,18 +17,21 @@ uv sync
 uv run prompt-coach discover             # list session stores with counts
 uv run prompt-coach report --since 30d   # coaching report over recent history
 uv run prompt-coach report --no-llm      # works with the GPU box switched off
+uv run prompt-coach dash                 # terminal dashboard, no LLM needed
 uv run prompt-coach query "what did I work on last week?"
+uv run prompt-coach import chatgpt-export.zip   # ChatGPT official data export
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `discover` | Find available session stores (Hermes, Claude Code) |
+| `discover` | Find available session stores (Hermes, Claude Code, Copilot) |
 | `report` | Coaching report: metrics, rubric scorecard, insights (`--since`, `--sample`, `--no-llm`, `--out`) |
+| `dash` | Terminal dashboard: volume sparklines, segments, scorecard (`--plain` for non-TTY) |
 | `stats` | Quick metrics table, no LLM needed |
 | `query` | Natural-language question over your prompt history, with citations |
-| `import` | Import external session data (JSON) into the cache |
+| `import` | Import a ChatGPT export (ZIP/JSON) or simple JSON sessions; format auto-detected |
 | `cache sync/info/clear` | Manage the local analysis cache |
 
 ## How it works

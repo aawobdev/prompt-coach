@@ -6,14 +6,28 @@ starting (Copilot store, ChatGPT export import, dash); phase 1 complete
 
 | Task | Description | Status | Notes |
 |------|-------------|--------|-------|
-| T35 | Copilot Chat store + tests | pending | format verified against live files |
-| T36 | ChatGPT export store + tests | pending | format UNVERIFIED (no real export yet) |
-| T37 | dash rendering module + tests | pending | rich, deterministic only |
-| T38 | CLI wiring (dash, copilot, import auto-detect) | pending | |
+| T35 | Copilot Chat store + tests | complete | format verified against live files |
+| T36 | ChatGPT export store + tests | complete | format UNVERIFIED (no real export yet) |
+| T37 | dash rendering module + tests | complete | rich, deterministic only |
+| T38 | CLI wiring (dash, copilot, import auto-detect) | complete | |
 | T39 | Phase-2 docs | complete | blueprint section 16, four DECISIONS entries |
-| T40 | Phase-2 gate | pending | |
+| T40 | Phase-2 gate | complete | see gate results below |
 
 llm-api integration: skipped this phase by decision (see DECISIONS.md).
+
+## Phase 2 gate results (2026-07-20, live corpora)
+
+- Suite: 143 tests passed; ruff and black clean; em-dash gates pass.
+- Live Copilot sync over /mnt/c: 24s first pass, 23 prompts extracted from
+  155 session files (many sessions hold no requests).
+- `dash --plain` renders on real data: per-store sparklines (claude-code,
+  copilot, hermes), human/machine split, deterministic scorecard. 17.5s
+  wall clock, almost all of it /mnt/c stat overhead during the implicit
+  sync. Known limitation: WSL 9P filesystem I/O; consider a sync throttle
+  or --no-sync flag if it grates.
+- ChatGPT importer: synthetic-fixture tested only; run
+  `prompt-coach import <export.zip>` against a real export to verify, then
+  update the UNVERIFIED marker here.
 
 ## Phase summary
 
