@@ -1,6 +1,5 @@
 """CLI entry point for prompt-coach."""
 
-from typing import Optional
 
 import typer
 
@@ -13,7 +12,7 @@ app = typer.Typer(
 
 @app.command()
 def discover(
-    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Hermes profile name"),
+    profile: str | None = typer.Option(None, "--profile", "-p", help="Hermes profile name"),
 ):
     """Find all available session stores on this machine."""
     typer.echo("🔍 Discovering session stores...")
@@ -24,9 +23,9 @@ def discover(
 @app.command()
 def report(
     store: int = typer.Option(1, "--store", "-s", help="Store index from `discover`"),
-    since: Optional[str] = typer.Option(None, "--since", help="Time range (e.g. 7d, 30d)"),
+    since: str | None = typer.Option(None, "--since", help="Time range (e.g. 7d, 30d)"),
     limit: int = typer.Option(50, "--limit", "-l", help="Max sessions to analyse"),
-    model: Optional[str] = typer.Option(None, "--model", "-m", help="Local LLM model name"),
+    model: str | None = typer.Option(None, "--model", "-m", help="Local LLM model name"),
 ):
     """Generate a coaching report from your prompt history."""
     typer.echo("📊 Generating coaching report...")

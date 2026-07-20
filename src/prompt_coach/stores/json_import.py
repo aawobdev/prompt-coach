@@ -12,7 +12,7 @@ from prompt_coach.stores.base import classify_origin, content_hash
 
 
 def _parse_timestamp(value: object) -> datetime:
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         return datetime.fromtimestamp(value, tz=UTC)
     if isinstance(value, str):
         try:
