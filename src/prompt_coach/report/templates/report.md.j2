@@ -1,0 +1,80 @@
+# Prompt Coach Report - {{ data.generated_at.strftime('%Y-%m-%d') }}
+
+{% if not data.llm_available -%}
+> **LLM unavailable - deterministic analysis only.** The local model at the
+> configured endpoint could not be reached, so rubric judgement scores
+> (A1/A2/A3/A8) and pattern insights are absent from this report. Metrics and
+> structural rubric checks below cover the full corpus.
+{% endif -%}
+
+## Summary
+
+- {{ data.prompt_count }} prompts across {{ data.session_count }} sessions{% if data.since %} since {{ data.since.strftime('%Y-%m-%d') }}{% endif %}
+{%- for store, count in data.store_counts.items() if store not in ('prompts', 'sessions') %}
+- {{ store }}: {{ count }} prompts
+{%- endfor %}
+{%- for store, reason in data.skipped_stores.items() %}
+- skipped {{ store }}: {{ reason }}
+{%- endfor %}
+{%- if data.llm_model and data.llm_available %}
+- analysis model: {{ data.llm_model }} (local)
+{%- endif %}
+
+## Style Profile
+
+| Metric | Human | Machine |
+|--------|-------|---------|
+{%- macro fmt(seg, attr, pct=False) -%}
+{%- if seg is none %}-{% elif pct %}{{ '%.0f%%'|format(seg[attr] * 100) }}{% else %}{{ '%.1f'|format(seg[attr]) }}{% endif %}
+{%- endmacro %}
+| Prompts | {{ data.metrics.human.prompt_count if data.metrics.human else 0 }} | {{ data.metrics.machine.prompt_count if data.metrics.machine else 0 }} |
+| Avg prompt length (est. tokens) | {{ fmt(data.metrics.human, 'avg_prompt_tokens') }} | {{ fmt(data.metrics.machine, 'avg_prompt_tokens') }} |
+| Median prompt length | {{ fmt(data.metrics.human, 'median_prompt_tokens') }} | {{ fmt(data.metrics.machine, 'median_prompt_tokens') }} |
+| Prompts per session | {{ fmt(data.metrics.human, 'prompts_per_session') }} | {{ fmt(data.metrics.machine, 'prompts_per_session') }} |
+| Refinement rate | {{ fmt(data.metrics.human, 'refinement_rate', True) }} | {{ fmt(data.metrics.machine, 'refinement_rate', True) }} |
+| Example rate | {{ fmt(data.metrics.human, 'example_rate', True) }} | {{ fmt(data.metrics.machine, 'example_rate', True) }} |
+| Constraint rate | {{ fmt(data.metrics.human, 'constraint_rate', True) }} | {{ fmt(data.metrics.machine, 'constraint_rate', True) }} |
+| Structured-output rate | {{ fmt(data.metrics.human, 'structured_output_rate', True) }} | {{ fmt(data.metrics.machine, 'structured_output_rate', True) }} |
+| First-message ratio | {{ fmt(data.metrics.human, 'avg_first_message_ratio', True) }} | {{ fmt(data.metrics.machine, 'avg_first_message_ratio', True) }} |
+
+{% if data.rubric %}
+## Rubric Scorecard
+
+Scored against prompting-standards A1-A13
+({{ data.rubric.rubric_version }}{% if data.rubric.sampled_llm %}, LLM judge on {{ data.rubric.sampled_llm }} sampled prompts{% endif %}).
+The machine column scores the orchestration pipeline's task specs, not you.
+
+| Rule | | Human | Machine | Coverage |
+|------|--|-------|---------|----------|
+{%- for r in data.rubric.rules %}
+| {{ r.rule }} | {{ r.title }} | {% if r.human_mean is not none %}{{ '%.2f'|format(r.human_mean) }}{% else %}n/a{% endif %} | {% if r.machine_mean is not none %}{{ '%.2f'|format(r.machine_mean) }}{% else %}n/a{% endif %} | {% if r.applicable %}{{ r.coverage }}{% else %}not scored{% endif %} |
+{%- endfor %}
+{% endif %}
+{% if data.patterns %}
+## Coaching Insights
+
+Based on a stratified sample of {{ data.patterns.sample_size }} prompts.
+
+### Strengths
+{% for s in data.patterns.strengths %}- {{ s }}
+{% endfor %}
+### Growth Areas
+{% for g in data.patterns.growth_areas %}- {{ g }}
+{% endfor %}
+### Notable Patterns
+{% for p in data.patterns.notable_patterns %}- {{ p }}
+{% endfor %}
+## Topic Breakdown
+
+| Topic | Share |
+|-------|-------|
+{%- for t in data.patterns.topics %}
+| {{ t.topic }} | {{ '%.0f%%'|format(t.share * 100) }} |
+{%- endfor %}
+{% endif %}
+{% if data.session_titles %}
+## Sessions This Period
+
+{% for date, title in data.session_titles %}- {{ date }}  {{ title }}
+{% endfor %}
+{% endif %}
