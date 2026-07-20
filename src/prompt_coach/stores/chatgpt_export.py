@@ -62,9 +62,7 @@ class ChatGPTExportStore:
     def _load(self) -> list[dict]:
         if self.file_path.suffix.lower() == ".zip":
             with zipfile.ZipFile(self.file_path) as zf:
-                name = next(
-                    (n for n in zf.namelist() if n.endswith("conversations.json")), None
-                )
+                name = next((n for n in zf.namelist() if n.endswith("conversations.json")), None)
                 if name is None:
                     raise FileNotFoundError("no conversations.json in export zip")
                 data = json.loads(zf.read(name))

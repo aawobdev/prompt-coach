@@ -17,7 +17,9 @@ from prompt_coach.config import Config, load_config
 from prompt_coach.llm.client import LLMUnavailable, LocalLLM, RemoteEndpointRefused
 from prompt_coach.models import ReportData
 from prompt_coach.report.generator import build_report
+from prompt_coach.stores.chatgpt_export import ChatGPTExportStore, looks_like_chatgpt_export
 from prompt_coach.stores.claude_code import ClaudeCodeStore
+from prompt_coach.stores.copilot import CopilotStore
 from prompt_coach.stores.hermes import HermesStore
 from prompt_coach.stores.json_import import JsonImportStore
 
@@ -52,6 +54,7 @@ def default_stores(cfg: Config) -> list:
     return [
         HermesStore(cfg.stores.hermes_db),
         ClaudeCodeStore(cfg.stores.claude_projects_dir),
+        CopilotStore(cfg.stores.copilot_dir),
     ]
 
 
@@ -180,6 +183,36 @@ def report(
 
 
 @app.command()
+def dash(
+    since: str | None = typer.Option("12w", "--since", help="Time range (default 12w)"),
+    plain: bool = typer.Option(False, "--plain", help="Force plain text output"),
+):
+    """Terminal dashboard: volume trends, segments, rubric scores. No LLM, no content."""
+    from rich.console import Console
+
+    from prompt_coach.report.dash import build_dash, weekly_volumes
+
+    cfg = load_config()
+    cache = open_cache(cfg)
+    cache.sync(default_stores(cfg))
+    since_dt = parse_since(since)
+    prompts = cache.prompts(since=since_dt)
+    if not prompts:
+        typer.echo("No prompts in range. Widen --since or check `prompt-coach discover`.")
+        raise typer.Exit(1)
+    renderable = build_dash(
+        metrics=compute_metrics(prompts),
+        rubric=run_rubric(prompts, None, cache),
+        volumes=weekly_volumes(prompts),
+        prompt_count=len(prompts),
+        session_count=len({f"{p.source}:{p.session_id}" for p in prompts}),
+        since_label=f"since {since_dt.date().isoformat()}" if since_dt else "all time",
+    )
+    console = Console(force_terminal=False, no_color=True) if plain else Console()
+    console.print(renderable)
+
+
+@app.command()
 def query(
     question: str = typer.Argument(help="Question about your prompt history"),
 ):
@@ -194,18 +227,36 @@ def query(
 
 @app.command("import")
 def import_(
-    file: Path = typer.Argument(help="Path to JSON file with session data"),
+    file: Path = typer.Argument(help="Path to a JSON/ZIP export (ChatGPT or simple format)"),
 ):
-    """Import external session data (JSON format) into the cache."""
+    """Import external session data into the cache (format auto-detected)."""
+    import json as _json
+
     cfg = load_config()
-    store = JsonImportStore(file)
+    store: ChatGPTExportStore | JsonImportStore
+    if file.suffix.lower() == ".zip":
+        store = ChatGPTExportStore(file)
+    else:
+        try:
+            with open(file) as f:
+                data = _json.load(f)
+        except (OSError, _json.JSONDecodeError) as exc:
+            typer.echo(f"Cannot read {file}: {type(exc).__name__}", err=True)
+            raise typer.Exit(1) from exc
+        if looks_like_chatgpt_export(data):
+            store = ChatGPTExportStore(file)
+        else:
+            store = JsonImportStore(file)
     info = store.discover()
     if not info.available:
         typer.echo(f"Cannot read {file}: {info.detail}", err=True)
         raise typer.Exit(1)
     cache = open_cache(cfg)
     s = cache.sync([store])
-    typer.echo(f"Imported {s.added} prompts ({s.deduped} already present) from {file}")
+    typer.echo(
+        f"Imported {s.added} prompts ({s.deduped} already present)"
+        f" from {file} as {store.kind.value}"
+    )
 
 
 @cache_app.command("sync")

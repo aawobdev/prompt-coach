@@ -62,6 +62,7 @@ def env(tmp_path, monkeypatch):
 
     monkeypatch.setenv("PROMPT_COACH_HERMES_DB", str(hermes))
     monkeypatch.setenv("PROMPT_COACH_CLAUDE_PROJECTS", str(tmp_path / "projects"))
+    monkeypatch.setenv("PROMPT_COACH_COPILOT_DIR", str(tmp_path / "copilot"))  # keep off /mnt/c
     monkeypatch.setenv("PROMPT_COACH_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("PROMPT_COACH_API_BASE", "http://127.0.0.1:9")  # nothing listens
     return tmp_path

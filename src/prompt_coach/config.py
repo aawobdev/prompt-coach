@@ -24,6 +24,7 @@ class LLMConfig:
 class StoresConfig:
     hermes_db: Path
     claude_projects_dir: Path
+    copilot_dir: Path | None  # None = probe default candidates (/mnt/c, ~/.config)
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,8 @@ def load_config(path: Path | None = None) -> Config:
     claude_dir = Path(
         env("CLAUDE_PROJECTS", stores_cfg.get("claude_projects_dir", "~/.claude/projects"))
     ).expanduser()
+    copilot_raw = env("COPILOT_DIR", stores_cfg.get("copilot_dir", ""))
+    copilot_dir = Path(copilot_raw).expanduser() if copilot_raw else None
     cache_dir = Path(env("CACHE_DIR", str(_cache_dir()))).expanduser()
 
     return Config(
@@ -81,6 +84,8 @@ def load_config(path: Path | None = None) -> Config:
             allow_remote=allow_remote,
             timeout=timeout,
         ),
-        stores=StoresConfig(hermes_db=hermes_db, claude_projects_dir=claude_dir),
+        stores=StoresConfig(
+            hermes_db=hermes_db, claude_projects_dir=claude_dir, copilot_dir=copilot_dir
+        ),
         cache_dir=cache_dir,
     )
