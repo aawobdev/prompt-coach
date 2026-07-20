@@ -955,3 +955,102 @@ that turns out wrong.
 - OpenAI/Claude.ai export readers
 - Hermes skill: weekly coaching report via cron to Slack
 - Prompt library extraction: best prompts as reusable templates
+
+---
+
+### 16. PHASE 2 (added 2026-07-20, after phase-1 gate)
+
+Scope decided with Alistair: Copilot store, ChatGPT export import, dash
+visualisation. llm-api integration skipped entirely (its UsageLog stores no
+message content by design; see DECISIONS.md). Everything below inherits the
+phase-1 invariants: read-only sources, unified Prompt model and cache,
+origin segmentation, privacy guard, no em dashes, per-task commits.
+
+#### 16.1 Store: Copilot Chat (verified against live files 2026-07-20)
+
+Path (WSL reading the Windows profile directly):
+`/mnt/c/Users/<user>/AppData/Roaming/Code/User/workspaceStorage/<ws>/chatSessions/<session-uuid>.jsonl`
+155 session files across 154 workspaces today. Config override:
+`PROMPT_COACH_COPILOT_DIR`. Native-Linux VS Code path
+(`~/.config/Code/User/workspaceStorage`) is probed as a fallback candidate.
+
+Each line is a JSON-patch event: `{"kind": K, "k": path, "v": value}`.
+Prompts are extracted from exactly two shapes:
+- kind 0: initial state; `v.requests[]` may already hold requests
+- kind 2 with `k == ["requests"]`: appends request objects
+A request carries `message.text` (the typed prompt), `requestId` (the
+message ref), and `timestamp` (epoch ms). kind 1 events mutate existing
+paths and never introduce prompts, so per-file offset resume stays valid;
+the session id is the filename stem so resumed parses never need the
+kind-0 line again.
+
+#### 16.2 Store: ChatGPT export (UNVERIFIED format)
+
+No local ChatGPT store exists; input is the official data-export ZIP or its
+`conversations.json`. Documented shape: a list of conversations, each with
+`title`, `create_time`, and a `mapping` tree of nodes whose
+`message.author.role == "user"` and `message.content.content_type ==
+"text"` carry `content.parts[]`. Hidden/system nodes are skipped. The
+`import` command auto-detects this shape (list items with a `mapping` key)
+vs the simple v1 JSON format. Status: built to the documented format,
+UNVERIFIED until run against a real export.
+
+#### 16.3 dash
+
+`prompt-coach dash [--since] [--plain]` renders with rich (already
+installed via typer): summary header; per-store weekly volume sparklines;
+human/machine split; style metrics table; deterministic rubric scorecard
+with colour thresholds. No LLM calls; no prompt content ever rendered
+(counts, rates, scores only); non-TTY output auto-degrades and --plain
+forces it.
+
+#### 16.4 Phase-2 build tasks
+
+All tasks: Role Developer/Tester, Model Claude Code, temp 0, same
+escalation and self-check rules as section 6.
+
+**T35: stores/copilot.py + tests**
+- Output contract: src/prompt_coach/stores/copilot.py, then
+  tests/test_stores_copilot.py (two commits).
+- Description: reader per 16.1 with iter_files/iter_file (byte offsets) so
+  the existing cache file-sync path handles incremental resync; malformed
+  lines skipped and counted; discover probes /mnt/c and native-Linux
+  candidates and reports unavailable cleanly elsewhere.
+- Verify: `uv run pytest tests/test_stores_copilot.py -q` and a live
+  `discover` showing the copilot store with a session count.
+- Escalate if: a live session file shows prompts arriving via any event
+  shape other than kind 0 / kind 2 ["requests"].
+
+**T36: stores/chatgpt_export.py + tests**
+- Output contract: src/prompt_coach/stores/chatgpt_export.py, then
+  tests/test_stores_chatgpt.py (two commits).
+- Description: reader per 16.2 accepting .zip or .json; import command
+  auto-detects chatgpt vs simple format; unverified status recorded.
+- Verify: `uv run pytest tests/test_stores_chatgpt.py -q` against an
+  inline synthetic export fixture.
+
+**T37: dash rendering module + tests**
+- Output contract: src/prompt_coach/report/dash.py, then
+  tests/test_dash.py (two commits).
+- Description: pure build_dash(data) -> rich renderable per 16.3;
+  sparkline helper with block characters; colour thresholds green >= 0.7,
+  yellow >= 0.4, red below.
+- Verify: `uv run pytest tests/test_dash.py -q`.
+
+**T38: CLI wiring**
+- Output contract: cli.py + config.py updated (one commit).
+- Description: dash command; copilot store in default_stores/discover;
+  import auto-detection; PROMPT_COACH_COPILOT_DIR config.
+- Verify: `uv run prompt-coach dash --plain` renders on the live cache;
+  `uv run prompt-coach discover` lists copilot.
+
+**T39: docs (this section, DECISIONS, STATUS, README, AGENTS)**
+- Verify: em-dash gates; README mentions dash and the new stores.
+
+**T40: phase-2 gate**
+- Verify: full suite + ruff + black; live discover shows copilot counts;
+  full resync stays under the section 4c NFRs; dash renders on real data
+  in both rich and --plain modes; STATUS.md updated.
+
+Dependency order: T35 and T36 parallel after docs; T37 parallel with both;
+T38 after T35+T37; T39 anytime; T40 last.

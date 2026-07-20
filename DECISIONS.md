@@ -114,3 +114,64 @@ prompt to write; a wall of zero-scored acknowledgements is noise dressed as
 signal.
 **Affects**: rubric scoring, pattern sampling, rubric tests.
 **Decided by**: Tester gate finding (Claude), 2026-07-20.
+
+## 2026-07-20 - Phase 2 scope: llm-api integration skipped entirely
+
+**Trigger**: proposal to attach prompt-coach to llm-api. Live inspection
+showed llm-api's UsageLog stores metadata only (tokens, cost, provider,
+latency) and by explicit design never message content, so "analyse llm-api
+prompts" is impossible without either a privacy-posture change in that repo
+(opt-in content capture) or settling for metadata-only enrichment.
+**Decision**: neither, for now. Phase 2 does not touch llm-api at all.
+Revisit when there is a concrete need.
+**Why**: Alistair's call (2026-07-20): the coaching value lives in the
+content stores; metadata enrichment is nice-to-have, and content capture is
+a privacy design change not worth opening speculatively.
+**Affects**: Phase 2 scope: Copilot store, ChatGPT export import, and the
+dash visualisation only.
+**Decided by**: Alistair, 2026-07-20 session.
+
+## 2026-07-20 - Copilot Chat store: verified real, read via /mnt/c
+
+**Trigger**: phase-2 proposal listed Copilot as verify-first-or-drop.
+Nothing exists under ~/.vscode-server on WSL, but the Windows VS Code
+profile has 155 chat session files across 154 workspaces at
+C:\Users\alistair\AppData\Roaming\Code\User\workspaceStorage\<ws>\chatSessions\<uuid>.jsonl,
+readable from WSL via /mnt/c without ssh.
+**Decision**: add a Copilot store reading that path (config override
+PROMPT_COACH_COPILOT_DIR). Format is a JSON-patch event log per line:
+kind 0 carries initial state (v.requests[]), kind 2 with k=["requests"]
+appends request objects; each request has message.text (the typed prompt),
+requestId, and an epoch-ms timestamp. kind 1 events mutate existing paths
+and carry no new prompts, so append-only offset resume stays valid.
+**Why**: verified against real files before designing; the reader replays
+only the two event kinds that carry prompts instead of full patch replay.
+**Affects**: models (new source kind), stores, cache sync, discover, dash.
+**Decided by**: Architect (Claude) after live inspection, 2026-07-20.
+
+## 2026-07-20 - ChatGPT: export-import only, format unverified
+
+**Trigger**: "local ChatGPT conversations" do not exist; ChatGPT offers only
+the official data-export ZIP containing conversations.json. No export file
+is present on this machine.
+**Decision**: build the importer against the documented export format
+(conversations list, mapping tree, author.role=user, content.parts) and
+accept both the ZIP and the extracted conversations.json. Marked UNVERIFIED
+in STATUS.md until run against a real export.
+**Why**: designing against a documented format is acceptable when flagged;
+inventing a local store is not.
+**Affects**: import command (auto-detects format), stores, STATUS.
+**Decided by**: Alistair (approved improved prompt), 2026-07-20.
+
+## 2026-07-20 - dash: deterministic-only visualisation, no prompt content
+
+**Trigger**: phase-2 ask for a "beautiful CLI visualisation".
+**Decision**: `prompt-coach dash` renders with rich (already a dependency
+via typer): per-store volume sparklines, human/machine split, style
+metrics, and the deterministic rubric scorecard. No LLM calls, no prompt
+content on screen (counts, rates, and scores only), auto-degrades on
+non-TTY plus a --plain flag.
+**Why**: the dashboard must be instant and privacy-clean; LLM insights
+belong in `report`, which is already cached and bannered.
+**Affects**: CLI, report/dash rendering, tests.
+**Decided by**: Alistair (approved improved prompt), 2026-07-20.

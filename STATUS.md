@@ -1,6 +1,19 @@
 # Project Status - prompt-coach
-Last updated: 2026-07-20 by Tester (Claude, Fable 5): phase 1 build complete,
-gate passed
+Last updated: 2026-07-20 by Architect (Claude, Fable 5): phase 2 scoped and
+starting (Copilot store, ChatGPT export import, dash); phase 1 complete
+
+## Phase 2 task status
+
+| Task | Description | Status | Notes |
+|------|-------------|--------|-------|
+| T35 | Copilot Chat store + tests | pending | format verified against live files |
+| T36 | ChatGPT export store + tests | pending | format UNVERIFIED (no real export yet) |
+| T37 | dash rendering module + tests | pending | rich, deterministic only |
+| T38 | CLI wiring (dash, copilot, import auto-detect) | pending | |
+| T39 | Phase-2 docs | complete | blueprint section 16, four DECISIONS entries |
+| T40 | Phase-2 gate | pending | |
+
+llm-api integration: skipped this phase by decision (see DECISIONS.md).
 
 ## Phase summary
 
