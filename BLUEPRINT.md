@@ -1,591 +1,952 @@
 ================================================================
-PROJECT BLUEPRINT — prompt-coach
+PROJECT BLUEPRINT
 ================================================================
-Generated: 2026-07-20
-Architect:  Hermes (deepseek-v4-flash) via blueprint-orchestration
-Project:    prompt-coach — Local-first personal prompt coach
-Platforms:  CLI tool (Python) + optional read-only HTTP API
-Status:     HANDSOVER — ready for implementation
+Generated: 2026-07-20 (v2, supersedes 2026-07-20 v1 by deepseek-v4-flash)
+Architect: Claude (Fable 5), Claude Code session, with live-system inspection
+Project:   prompt-coach: local-first personal prompt coach
+Platforms: CLI (Python 3.12, Linux/WSL2)
+Status:    READY FOR EXECUTION
 
-> Read the full market-gap validation in §0. The short version:
-> existing tools optimise prompts (DSPy, promptfoo) or measure spend
-> (Langfuse, Datadog) or study populations (datasets) — none analyse
-> *your individual prompting behaviour* from your actual history and
-> give you personalised coaching. The gap exists because SaaS can't
-> solve it (privacy) and the coaching angle is hard to get right.
-> This tool solves it locally, with home-grown AI, zero data export.
-
+ACTIVE ROLES:
+  [x] Architect  (this document; interview + inspection complete)
+  [x] Developer  (Claude Code executes all build tasks; user decision 2026-07-20)
+  [x] Tester     (Claude Code; test tasks and the final gate)
+  [ ] Designer   (N/A: CLI text and markdown output only, no visual surface)
+  [ ] DevOps     (N/A: local tool, nothing deployed; install is `uv sync`)
+  [ ] Security   (N/A as a separate audit phase: single-user, local, read-only
+                  tool; security requirements are captured in section 4d and
+                  verified in the final gate instead)
+  [ ] End-User   (N/A phase 1: the primary user supervises the build directly)
 ================================================================
+
+> v1 of this blueprint was produced without inspecting the live systems and
+> invented the Hermes store path and schema. v2 corrects every store fact
+> against the real machines, restructures the document to the
+> `blueprint-orchestration` skill, and applies `prompting-standards` Part A
+> to every build task. All decision history is in `DECISIONS.md`.
+
+---
 
 ### 0. COVERAGE MATRIX
 
-| Concern | Covered by |
-|---------|-----------|
-| Market gap validation | §1 · Validated with user in session 2026-07-20 |
-| Product vision | §2 · Privacy-first personal prompt analytics |
-| Architecture | §3 · Plugin store readers + local LLM analysis |
-| Session store support | §4 · Hermes SQLite, OpenWebUI, generic JSON |
-| Analysis pipeline | §5 · Pattern extraction, topic clustering, style metrics |
-| Reporting | §6 · Markdown reports, CLI output, optional JSON |
-| CLI design | §7 · discover, report, query, serve commands |
-| Integration with llm-api | §8 · Usage log ingestion, model routing |
-| Implementation plan | §9 · Phased tasks for Claude to execute |
-| Testing | §10 · Unit, integration, snapshot tests |
+One platform column (CLI on Linux/WSL2). Every concern is covered or
+explicitly N/A with a reason.
+
+| Concern | CLI | Covered by |
+|---------|-----|-----------|
+| Design / UX | N/A: text output; report layout spec'd in 4 and T27 | - |
+| System design & architecture | yes | Architect, section 3 |
+| Stack & hosting selection | yes | section 3b |
+| Development | yes | Developer, section 6 (T5-T31, T33) |
+| Functional testing | yes | Tester, section 6 (T10, T12, T15, T17, T20, T22, T24, T26, T29, T32, T34) |
+| Non-functional (perf) | yes | section 4c, verified in T34 |
+| Accessibility | N/A: terminal text; no color-only signalling in output | - |
+| Security (design) | yes | section 4d |
+| Data & privacy | yes | section 4e (this is the product's core promise) |
+| Deployment & release | N/A: nothing deployed; runs from the repo via uv | - |
+| Observability | N/A: interactive CLI; errors surface directly to the user | - |
+| End-user validation | yes | T34 live smoke run by the primary user |
+| Documentation | yes | section 10d (T1-T4, T33) |
 
 ---
 
-### 1. VALIDATED MARKET GAP
+### 1. PRODUCT BRIEF
 
-**The insight (from the original slide):** Existing tooling falls into
-three categories, and the intersection of all three is empty:
+prompt-coach is a local-first CLI that reads your own prompt history from the
+session stores already on your machine (Hermes `state.db`, Claude Code project
+transcripts), analyses your personal prompting style, and produces a coaching
+report: style metrics, scores against your own `prompting-standards` rubric
+(A1-A13), and LLM-detected patterns, strengths, and growth areas. Analysis
+runs against a local Ollama model only; prompt content never leaves the
+machine. It is not a prompt optimizer (it coaches the prompter, not the
+prompt), not an observability dashboard (llm-api owns tokens/cost), and not a
+SaaS. Done means: `prompt-coach report` produces a useful, honest coaching
+briefing over the real corpora, degrading gracefully to deterministic-only
+analysis when no local model is reachable.
 
-1. **Optimizers** (DSPy, promptfoo, Anthropic Improver) — improve a single
-   prompt, never the prompter. Nothing transferable.
-2. **Observability** (Langfuse, Helicone, Datadog) — measure tokens, cost,
-   latency, output. Never critique the *human's* style.
-3. **Corpora** (datasets, population research) — aggregate patterns across
-   many people. Never individual.
+Why it can exist at all: the gap between prompt optimizers (DSPy, promptfoo),
+observability tools (Langfuse, Helicone), and population research is a tool
+that studies the individual prompter. Nobody uploads their full prompt history
+to a SaaS, so the niche is only solvable local-first. The primary user already
+has the data (62 Hermes sessions, 644 Claude Code transcripts) and the local
+inference hardware.
 
-**The gap:** A tool that reads YOUR actual prompt history, analyses YOUR
-personal prompting style, and gives YOU a coaching report.
-
-**Why it exists (validated 2026-07-20):**
-- Privacy — nobody wants to upload their prompt history to a SaaS. This is
-  the primary moat. The only way to solve it is local-first.
-- Genuinely useful coaching is hard — distinguishing signal from noise in
-  prompt patterns requires a local LLM with context.
-- The market is small for a paid product, but the *personal utility* for
-  power users who already have the data is high.
-
-**Why build it now:**
-- You already have a rich session store (Hermes SQLite) with hundreds of
-  conversations
-- You already run local models (Ollama on 192.168.1.123:11434)
-- You already have llm-api logging every request with token usage
-- The privacy moat means no SaaS competitor can easily replicate this
+**Users**: primary is Alistair (power user: Hermes + Claude Code + llm-api +
+Ollama). Secondary is anyone with a local LLM and a supported session store.
 
 ---
 
-### 2. PRODUCT VISION
+### 2. USER STORIES
 
-**Name:** prompt-coach (or "proco" for short)
+**Happy path**
+As a power user, I want to run `prompt-coach report --since 30d`, so that I
+get a coaching briefing over my recent Hermes and Claude Code history.
+Acceptance criteria:
+- Report contains: summary counts, style metrics table, rubric scorecard
+  (human and machine segments side by side), strengths / growth areas /
+  notable patterns, topic distribution.
+- All LLM calls went to the configured local endpoint only.
+- Second run within the same data window completes fast (LLM cache hits).
 
-**Tagline:** *Your personal prompting analyst. Runs locally. Zero data export.*
+**Edge case: no local model**
+As a user whose desktop Ollama is off, I want `prompt-coach report` to still
+work, so that deterministic analysis is never blocked by the GPU box.
+Acceptance criteria:
+- Report renders with metrics + deterministic rubric checks.
+- A visible banner states: LLM unavailable, deterministic analysis only.
+- Exit code 0.
 
-**What it does:**
-1. **Discovers** session stores on your machine (Hermes, OpenWebUI, etc.)
-2. **Extracts** your prompt history — what you actually typed, not templates
-3. **Analyses** patterns via a local LLM — topic clustering, style metrics,
-   recurring patterns, effectiveness signals
-4. **Reports** insights as a markdown briefing — "here's how you prompted
-   this week, what's working, what's not"
-
-**What it is NOT:**
-- NOT a prompt optimizer (it doesn't rewrite prompts)
-- NOT an observability dashboard (it doesn't track tokens/cost — that's
-  llm-api's job)
-- NOT a SaaS product (it's local-only, CLI-first)
-
-**User personas:**
-- **Primary:** Alistair — power user, runs Hermes + llm-api + Ollama,
-  wants to understand his own prompting patterns and improve
-- **Secondary:** Anyone with a local LLM setup and a session store who
-  wants personal analytics on their LLM usage
+**Failure case: store missing or locked**
+As a user on a machine without Hermes, I want commands to succeed on the
+stores that do exist, so that one absent store never aborts the run.
+Acceptance criteria:
+- `discover` lists each store with available/unavailable and a reason.
+- `report` proceeds with the remaining stores and says what was skipped.
+- A read-locked or corrupt store is reported, not fatal.
 
 ---
 
 ### 3. ARCHITECTURE
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    prompt-coach                          │
-│                                                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐ │
-│  │  discover     │  │  extract      │  │  analyse      │ │
-│  │  (find stores)│─▶│  (read history)│─▶│  (LLM pipeline)│ │
-│  └──────────────┘  └──────────────┘  └───────┬───────┘ │
-│                                              │         │
-│  ┌──────────────┐  ┌──────────────┐          │         │
-│  │  report      │◀─│  format      │◀─────────┘         │
-│  │  (CLI output)│  │  (markdown)  │                    │
-│  └──────────────┘  └──────────────┘                    │
-│                                                         │
-│  ┌──────────────┐                                       │
-│  │  serve       │  (optional read-only HTTP API)       │
-│  └──────────────┘                                       │
-└─────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌──────────────────┐    ┌──────────────────┐
-│  Session stores   │    │  Local LLM       │
-│  (Hermes SQLite,  │    │  (Ollama via     │
-│   OpenWebUI,      │    │   llm-api or     │
-│   JSON exports)   │    │   direct)        │
-└──────────────────┘    └──────────────────┘
++------------------------------------------------------------------+
+|                          prompt-coach                            |
+|                                                                  |
+|  stores/               cache.py               analysis/          |
+|  +--------------+     +----------------+     +----------------+  |
+|  | hermes.py    |     | cache.db       |     | metrics.py     |  |
+|  | claude_code  | --> |  prompts       | --> | rubric.py      |  |
+|  | json_import  |     |  file_state    |     | patterns.py    |  |
+|  +--------------+     |  prompts_fts   |     +-------+--------+  |
+|   read-only, streamed |  llm_cache     |             |           |
+|                       +-------+--------+             v           |
+|                               |              +----------------+  |
+|                               |              | report/        |  |
+|                               +------------> | query.py       |  |
+|                                              | cli.py         |  |
+|                                              +----------------+  |
++------------------------------------------------------------------+
+        |                                        |
+        v                                        v
++-------------------+                  +----------------------+
+| Session stores    |                  | Local LLM only       |
+| ~/.hermes/state.db|                  | Ollama 192.168.1.123 |
+| ~/.claude/projects|                  | :11434/v1 (or llm-api|
+| JSON imports      |                  | gateway, guarded)    |
++-------------------+                  +----------------------+
 ```
 
-**Data flow:**
-1. `discover` scans well-known paths for session stores
-2. `extract` reads raw conversations (prompts only, not responses)
-3. `analyse` sends batches of prompts to a local LLM with structured
-   prompts for analysis (topic clustering, style metrics, pattern detection)
-4. `format` renders the analysis as a readable markdown report
-5. `report` CLI command ties it all together
+**Data flow**
+1. `sync` (implicit in every command, explicit via `prompt-coach cache sync`)
+   streams prompts from each store into the local cache DB, incrementally.
+2. Deterministic analysis (style metrics + rubric rule checks) runs over the
+   full cached corpus. Cheap, no LLM.
+3. LLM analysis (rubric judging, pattern map-reduce) runs over stratified
+   samples, every call cached in `llm_cache`.
+4. `report` renders markdown; `query` retrieves via cache FTS5 then asks the
+   local LLM to answer with citations.
 
-**Key design decisions:**
-- **Prompts only, not responses** — the coaching signal is in what the
-  user types, not what the model returns. Responses are excluded to save
-  tokens and privacy.
-- **Local LLM only** — never calls an external API. Falls back to a
-  simple rule-based analysis if no local model is available.
-- **Batched processing** — large histories are processed in chunks to
-  stay within context windows.
+**Key design decisions** (full reasoning in DECISIONS.md)
+- Prompts only, never assistant responses: the coaching signal is what the
+  user types; excluding responses saves tokens and shrinks the privacy
+  surface.
+- Human/machine segmentation at extraction time: Hermes "user" messages
+  include machine-generated `hermes -z` task specs, and those are scored as
+  their own segment (they audit the orchestration pipeline's prompt quality
+  against prompting-standards Part A). The human segment is primary.
+- Local LLM only, with a guard: the client refuses non-private base URLs
+  unless explicitly configured otherwise (section 4e).
+- Cache DB as the keystone: parse each store once, resync incrementally,
+  dedupe session forks, index for FTS, memoise LLM results.
 
 ---
 
-### 4. SESSION STORE SUPPORT
+### 3b. STACK & HOSTING SELECTION
 
-#### 4.1 Hermes SQLite (primary target)
+Stack is mandated by the existing scaffold and house conventions (Python 3.12,
+uv, typer, src-layout, ruff/black/pytest, mirroring llm-api). Hosting is N/A
+(local CLI). Two real decisions remained; both evaluated, both recorded in
+DECISIONS.md:
 
-Hermes stores sessions in `~/.hermes/data/sessions.db` (SQLite).
+**Decision 1: synchronous code, stdlib `sqlite3`, no ORM.**
+This is a linear batch pipeline (read, cache, analyse, render) with no
+concurrent I/O worth hiding: SQLite reads are local, JSONL parsing is
+disk/CPU-bound streaming, and the LLM bottleneck is a single local GPU that
+serialises requests anyway. SQLAlchemy would put an ORM over four read-only
+SELECTs against a schema this project does not own; aiosqlite would drag an
+event loop and pytest-asyncio through every module for zero throughput.
+Consequence: `sqlalchemy`, `aiosqlite`, `pytest-asyncio` are removed from
+pyproject (T5). Reversibility: a ThreadPoolExecutor around LLM calls is a
+contained later change if concurrency ever pays.
 
-Key tables (from inspection):
-- `sessions` — id, title, created_at, updated_at, profile_id
-- `messages` — id, session_id, role (user/assistant/tool), content, created_at
-- `profiles` — id, name
-
-Extractor reads messages where `role = 'user'` and groups by session.
-
-#### 4.2 OpenWebUI (secondary target)
-
-OpenWebUI stores sessions in its Postgres or SQLite database.
-
-Channel model: `chats` table with `id`, `title`, `user_id`, `messages` (JSONB).
-
-Extractor reads the `messages` JSONB field and extracts user messages.
-
-#### 4.3 Generic JSON import (tertiary target)
-
-A `--import` flag that accepts a JSON file with format:
-```json
-[
-  {
-    "session_id": "...",
-    "title": "...",
-    "timestamp": "ISO-8601",
-    "messages": [
-      {"role": "user", "content": "..."},
-      {"role": "assistant", "content": "..."}
-    ]
-  }
-]
-```
-
-#### 4.4 Store abstraction
-
-Each store implements a `SessionStore` protocol:
-```python
-class SessionStore(Protocol):
-    name: str
-    def discover(self) -> list[StorePath]: ...
-    def read_sessions(self, path: StorePath, limit: int = 50, since: str | None = None) -> list[Session]: ...
-```
+**Decision 2: runtime analysis model is local-only, direct Ollama default.**
+Default `http://192.168.1.123:11434/v1`, model `qwen3-coder:30b`. The llm-api
+gateway (`http://localhost:8080/v1`) is supported but guarded, because the
+gateway can route or fall back to cloud providers, which would silently break
+the privacy promise (section 4e). Config precedence: `PROMPT_COACH_*` env
+vars, then `~/.config/prompt-coach/config.toml`, then defaults.
 
 ---
 
-### 5. ANALYSIS PIPELINE
+### 4. TECHNICAL SPEC
 
-The analysis runs in stages, each stage calling the local LLM with a
-structured prompt.
+**Runtime**: Python >= 3.12, uv-managed venv.
+**Dependencies** (after T5 prune): typer, openai (sync client), httpx, jinja2,
+pydantic. Dev: pytest, pytest-cov, ruff, black, respx.
 
-#### Stage 1: Topic clustering
-
-For each session, extract the topic/domain from the user's messages.
-
-**LLM prompt:**
-```
-Given these user messages from an LLM session, identify the single
-topic/domain (e.g. "coding/python", "writing/email", "research/health",
-"creative/writing"). Output only the topic label.
-```
-
-#### Stage 2: Style metrics
-
-For each session, compute structural metrics:
-- Average prompt length (tokens)
-- Number of follow-up messages per session
-- Whether the prompt includes examples, constraints, or structured output
-- Whether the user iterated (refined the prompt after the first response)
-- Front-loading ratio (how much of the request is in the first message)
-
-**Rule-based** (no LLM call):
-```python
-@dataclass
-class StyleMetrics:
-    avg_prompt_tokens: float
-    median_prompt_tokens: float
-    prompts_per_session: float
-    refinement_rate: float          # % of sessions with >1 user message
-    example_rate: float             # % of prompts containing examples
-    constraint_rate: float          # % of prompts with explicit constraints
-    structured_output_rate: float   # % of prompts asking for JSON/table/etc.
-    avg_first_message_ratio: float  # % of total content in first message
-```
-
-#### Stage 3: Pattern detection
-
-Identify recurring patterns, strengths, and weaknesses across all sessions.
-
-**LLM prompt (batched across sessions):**
-```
-You are a prompt coaching analyst. Given these {N} sessions from a user's
-prompt history, identify:
-
-1. TOP 3 STRENGTHS — what does this user consistently do well?
-   (e.g. "gives clear examples", "specifies output format", "provides context")
-
-2. TOP 3 GROWTH AREAS — what patterns consistently lead to suboptimal results?
-   (e.g. "vague requests without examples", "overly long prompts that lose focus")
-
-3. NOTABLE PATTERNS — recurring approaches, habits, or blind spots
-
-4. DOMAIN DISTRIBUTION — what topics does the user spend most prompting time on?
-
-Be specific and reference actual patterns from the data. Avoid generic advice.
-```
-
-#### Stage 4: Trend analysis
-
-When run with `--since 30d` or against multiple snapshots, compare metrics
-over time to detect improvement or regression.
-
-#### Stage 5: Report generation
-
-The report is a markdown document with sections:
-
-```markdown
-# Prompt Coach Report — 2026-07-20
-## Summary
-- {N} sessions analysed, {M} total prompts
-- {X} topics, top: {topic1}, {topic2}
-- Avg prompt length: {tokens} tokens
-
-## Style Profile
-| Metric | Value | vs Baseline |
-|--------|-------|-------------|
-| Avg prompt length | 180 tokens | +12% |
-| Refinement rate | 65% | +5% |
-| Example rate | 40% | new |
-| ...
-
-## Coaching Insights
-### Strengths
-- ...
-
-### Growth Areas
-- ...
-
-### Notable Patterns
-- ...
-
-## Topic Breakdown
-| Topic | Sessions | % of total |
-|-------|----------|------------|
-| Coding | 24 | 48% |
-| Writing | 12 | 24% |
-| ...
-
-## Sessions this period
-{list of session titles + dates + topic labels}
-```
-
----
-
-### 6. CLI DESIGN
-
-```bash
-# Discover session stores
-prompt-coach discover
-# Output:
-#   Found 3 stores:
-#   [1] Hermes SQLite  ~/.hermes/data/sessions.db  (247 sessions)
-#   [2] OpenWebUI      http://192.168.1.123:3000    (89 sessions, needs auth)
-#   [3] JSON import    ~/exports/                    (2 files)
-
-# Generate a report
-prompt-coach report [--store 1] [--since 7d] [--limit 50]
-# Output: full markdown report to stdout
-
-# Quick overview
-prompt-coach stats [--store 1]
-# Output: compact summary table
-
-# Query — ask a question about your prompt history
-prompt-coach query "What topics did I work on last week?"
-# Output: LLM-generated answer based on session data
-
-# Serve — read-only HTTP API for integration
-prompt-coach serve --port 9090
-# Endpoints:
-#   GET /v1/sessions  — list sessions
-#   GET /v1/report    — generate report
-#   GET /v1/health    — health check
-
-# Import — import external session data
-prompt-coach import --file ~/exports/sessions.json
-```
-
----
-
-### 7. INTEGRATION WITH LLM-API
-
-prompt-coach and llm-api are separate repos but designed to work together:
-
-**Option A — llm-api as model router:**
-prompt-coach calls `http://localhost:8080/v1/chat/completions` with a
-gateway key, routing through llm-api's catalog. This means the model
-choice respects llm-api's configuration (which Ollama models, OpenRouter
-fallback, etc.).
-
-**Option B — direct Ollama:**
-prompt-coach calls `http://192.168.1.123:11434/v1/chat/completions`
-directly, bypassing the gateway. Simpler, no auth dependency.
-
-**Config precedence:** `PROMPT_COACH_API_BASE` env var, then
-`~/.config/prompt-coach/config.toml`, then default to direct Ollama.
-
-**Usage log ingestion:**
-prompt-coach can read llm-api's usage log table (if Postgres is shared)
-or a JSON export for analytics. This enriches the report with actual
-token spend per session/topic.
-
----
-
-### 8. PROJECT STRUCTURE
+#### 4.1 File structure
 
 ```
-~/projects/prompt-coach/
-├── AGENTS.md              # Agent guidance (this file is canonical)
-├── BLUEPRINT.md           # Full spec (this document)
-├── pyproject.toml         # Project config
-├── .gitignore
-├── README.md              # Short user-facing readme
-├── src/
-│   └── prompt_coach/
-│       ├── __init__.py
-│       ├── __main__.py         # CLI entry: `python -m prompt_coach`
-│       ├── cli.py              # Typer/Click CLI app
-│       ├── config.py           # Config loading (env, toml, defaults)
-│       ├── stores/
-│       │   ├── __init__.py
-│       │   ├── base.py         # SessionStore protocol + Session dataclass
-│       │   ├── hermes.py       # Hermes SQLite reader
-│       │   ├── openwebui.py    # OpenWebUI reader (HTTP API)
-│       │   └── json_import.py  # Generic JSON import
-│       ├── analysis/
-│       │   ├── __init__.py
-│       │   ├── metrics.py      # Rule-based style metrics calculator
-│       │   ├── topics.py       # LLM-based topic clustering
-│       │   ├── patterns.py     # LLM-based pattern detection
-│       │   └── trends.py       # Trend analysis over time
-│       ├── report/
-│       │   ├── __init__.py
-│       │   ├── generator.py    # Report generation (markdown)
-│       │   └── templates/      # Jinja2 report templates
-│       ├── llm/
-│       │   ├── __init__.py
-│       │   ├── client.py       # Local LLM client (OpenAI-compatible)
-│       │   └── prompts.py      # Analysis prompts
-│       └── server/
-│           ├── __init__.py
-│           └── app.py          # Optional read-only HTTP API (FastAPI)
-├── tests/
+prompt-coach/
+├── AGENTS.md                    canonical agent guidance
+├── BLUEPRINT.md                 this document
+├── STATUS.md                    task/phase tracking (T3)
+├── DECISIONS.md                 decision log (T4)
+├── README.md                    user-facing quick start (T33)
+├── pyproject.toml
+├── src/prompt_coach/
 │   ├── __init__.py
-│   ├── conftest.py
-│   ├── fixtures/
-│   │   └── sample_sessions.json  # Test data
-│   ├── test_metrics.py
-│   ├── test_stores_hermes.py
-│   ├── test_stores_json.py
-│   ├── test_report_generator.py
-│   └── test_cli.py
-└── docs/
-    └── architecture.md       # (optional, BLUEPRINT.md is primary)
+│   ├── __main__.py              python -m prompt_coach
+│   ├── cli.py                   typer app: discover, stats, report, query,
+│   │                            import, cache (T31)
+│   ├── config.py                env > toml > defaults (T7)
+│   ├── models.py                Prompt, SourceKind, PromptOrigin,
+│   │                            StyleMetrics, RuleScore, RubricSummary,
+│   │                            PatternReport, ReportData (T6)
+│   ├── cache.py                 CacheDB: sync, dedupe, FTS5, llm_cache (T16)
+│   ├── query.py                 FTS retrieve + LLM answer (T30)
+│   ├── stores/
+│   │   ├── base.py              SessionStore protocol, StoreInfo (T8)
+│   │   ├── hermes.py            state.db reader (T9)
+│   │   ├── claude_code.py       JSONL streaming reader (T11)
+│   │   └── json_import.py       generic JSON import (T13)
+│   ├── analysis/
+│   │   ├── metrics.py           deterministic style metrics (T21)
+│   │   ├── rubric.py            A1-A13 scoring (T23)
+│   │   └── patterns.py          LLM pattern map-reduce, incl. topics (T25)
+│   ├── llm/
+│   │   ├── client.py            LocalLLM, guard, LLMUnavailable (T18)
+│   │   └── prompts.py           versioned templates (T19)
+│   ├── report/
+│   │   ├── generator.py         build_report (T28)
+│   │   └── templates/report.md.j2  (T27)
+│   └── server/                  empty; read-only HTTP API is phase 2
+└── tests/                       one test module per source module + fixtures
+```
+
+`analysis/topics.py` and `analysis/trends.py` from v1 are gone: topic
+distribution is one output field of the pattern map-reduce (a per-session
+topic pass over thousands of prompts is bulk LLM work that prompting-standards
+B7 forbids), and trend analysis is phase 2.
+
+#### 4.2 Store: Hermes (verified against the live DB 2026-07-20)
+
+Path: `~/.hermes/state.db` (SQLite, WAL). Open read-only via URI
+`file:...?mode=ro`. There is no `profiles` table (v1 invented it).
+
+Columns actually used:
+- `sessions(id TEXT PK, source TEXT, model TEXT, started_at REAL unixepoch,
+  ended_at REAL, title TEXT, message_count INT, cwd TEXT, git_repo_root TEXT,
+  archived INT)`
+- `messages(id INTEGER PK, session_id TEXT, role TEXT, content TEXT,
+  timestamp REAL unixepoch, active INT, compacted INT)`
+
+Extraction filter: `role='user' AND active=1 AND compacted=0` (all 281
+current user rows have compacted=0; the filter is defensive against future
+compaction summaries). Origin classification: content matching machine task
+spec shapes (`TASK:` / `Task spec:` prefixes and similar) is `machine`, the
+rest `human`. FTS5 tables (`messages_fts`) exist in the DB but are not used;
+the unified cache FTS covers retrieval (DECISIONS.md).
+
+#### 4.3 Store: Claude Code (verified against live transcripts 2026-07-20)
+
+Path: `~/.claude/projects/<project-slug>/<session-uuid>.jsonl`. 644 files,
+691MB. Each line is a JSON object. A hand-typed user prompt line looks like:
+
+```json
+{"type":"user","message":{"role":"user","content":"..."},
+ "promptSource":"typed","origin":{"kind":"human"},"isSidechain":false,
+ "uuid":"...","timestamp":"2026-06-22T21:39:40.265Z","sessionId":"...",
+ "cwd":"/home/alistair/projects/x","gitBranch":"master"}
+```
+
+Accept a line only when ALL hold:
+1. `type == "user"`
+2. `origin.kind == "human"` (drops tool results, hooks, machine entries)
+3. `promptSource == "typed"`
+4. `isSidechain` is falsy (drops subagent traffic)
+5. content, after normalisation, is a real prompt: strings pass through;
+   content-block arrays keep only `text` blocks; lines whose content is a
+   local-command echo (`<command-name>`, `<local-command-stdout>`) or a bare
+   `<system-reminder>` wrapper are dropped, and inline system-reminder blocks
+   are stripped from otherwise-real prompts.
+
+Files are streamed line by line, never loaded whole. Incremental resync
+records `(path, mtime, size, byte_offset)`; JSONL files are append-only per
+file, so a grown file resumes from its stored offset, and a shrunk/rewritten
+file re-parses from zero (upserts are idempotent). Session forks copy earlier
+messages into new files: dedupe on message `uuid` when present, else on
+`(content_hash, timestamp)`.
+
+#### 4.4 Store: JSON import
+
+`prompt-coach import --file x.json`: a list of sessions
+`{session_id, title, timestamp, messages:[{role, content}]}` (v1 format kept).
+User messages become prompts with `origin=human` unless the machine
+classifier says otherwise.
+
+#### 4.5 Cache DB
+
+`$XDG_CACHE_HOME/prompt-coach/cache.db` (default `~/.cache/prompt-coach/`),
+created with mode 0600. Tables:
+- `prompts(source, session_id, message_ref, content, content_hash, timestamp,
+  origin, cwd, git_repo, PRIMARY KEY(source, session_id, message_ref))` plus
+  a uniqueness guard on `(content_hash, timestamp)` for fork dedupe
+- `file_state(path PK, mtime, size, offset)`
+- `llm_cache(key PK, payload JSON, model, template_version, created_at)`,
+  key = sha256(sorted content hashes + template version + model)
+- `prompts_fts` FTS5 external-content index over `content`
+
+Deleting the directory erases every derived artifact (rollback and the
+privacy retention story in one).
+
+#### 4.6 Key interfaces
+
+```python
+class SourceKind(StrEnum): HERMES; CLAUDE_CODE; JSON_IMPORT
+class PromptOrigin(StrEnum): HUMAN; MACHINE
+
+@dataclass(frozen=True)
+class Prompt:
+    source: SourceKind; session_id: str; message_ref: str
+    content: str; content_hash: str; timestamp: datetime  # always UTC-aware
+    origin: PromptOrigin; cwd: str | None; git_repo: str | None
+
+class SessionStore(Protocol):
+    kind: SourceKind
+    def discover(self) -> StoreInfo: ...
+    def iter_prompts(self, since: datetime | None = None) -> Iterator[Prompt]: ...
+
+class CacheDB:
+    def sync(self, stores, force=False) -> SyncStats: ...
+    def prompts(self, *, since=None, origin=None, source=None, limit=None): ...
+    def search(self, query, limit=20) -> list[Prompt]: ...
+    def get_llm(self, key) -> dict | None: ...
+    def put_llm(self, key, payload) -> None: ...
+
+class LocalLLM:
+    def __init__(self, base_url, model, api_key="ollama", timeout=120.0,
+                 allow_remote=False): ...   # raises on public URL unless allowed
+    def available(self) -> bool: ...        # GET {base}/models, 2s timeout
+    def complete_json(self, system, user, *, temperature=0.0,
+                      max_tokens=2000) -> dict: ...  # one re-prompt on bad JSON
+```
+
+Timestamps: Hermes REAL unixepoch and Claude ISO-8601 both normalise to
+UTC-aware `datetime` at parse time, because `--since` filtering compares
+across stores.
+
+**AGENTS.md** at the repo root stays canonical for agents; no CLAUDE.md,
+.cursorrules, or copilot files beyond one-line pointers.
+
+---
+
+### 4b. CONTENT INVENTORY
+
+The "content" is the user's existing prompt history; acquisition (cache sync)
+is early in the build plan (T8-T17) per the skill.
+
+| Corpus | Location | Volume | Notes |
+|--------|----------|--------|-------|
+| Hermes | ~/.hermes/state.db | 62 sessions, 281 user msgs (2026-06-12 to 2026-07-17) | many are machine `TASK:` specs; segment |
+| Claude Code | ~/.claude/projects/ | 644 JSONL transcripts, 691MB | the primary corpus; needs the 5-filter parse |
+| JSON import | user-supplied | ad hoc | v1 format kept |
+| OpenWebUI | ollama VM, remote DB | deferred | phase 2 (DECISIONS.md) |
+| llm-api usage logs | llm-api Postgres | deferred | phase 2 enrichment |
+
+Discard list: assistant/tool messages, sidechain traffic, command echoes,
+system reminders, inactive/compacted rows.
+
+---
+
+### 4c. NON-FUNCTIONAL REQUIREMENTS
+
+Concrete targets; T34 verifies them on the real corpus.
+
+- Initial full sync of the Claude Code corpus: < 5 minutes on WSL2
+  (streaming line reads, no whole-file loads).
+- Incremental resync: < 30 seconds when little changed.
+- `report --no-llm` over the full cache: < 60 seconds.
+- Memory ceiling: < 500MB (iterators end to end; never materialise 691MB).
+- Each LLM call payload: <= ~8k estimated tokens (chars/4 heuristic);
+  individual prompts truncated to 1,500 chars before inclusion. Conservative
+  because the Ollama server's effective num_ctx is unverified (section 9).
+- LLM stage on defaults (150-prompt rubric sample + 300-prompt pattern
+  sample): completes in one sitting on the RTX 3090 Ti; every call cached so
+  re-runs are incremental.
+
+---
+
+### 4d. SECURITY REQUIREMENTS
+
+- All source stores opened strictly read-only: SQLite via
+  `file:...?mode=ro` URI (not `immutable=1`: Hermes runs WAL and may write
+  concurrently); JSONL opened for reading only. No code path writes to any
+  source store.
+- Cache directory and DB created 0600/0700; it contains prompt content.
+- No secrets in the repo. The only credential the config may hold is a
+  gateway key for llm-api on localhost; never a cloud provider key.
+- Untrusted input surfaces: JSONL/JSON parsing (malformed lines are skipped
+  and counted, never crash the sync); FTS queries built with parameter
+  binding, no string-interpolated SQL anywhere.
+- ruff security rules (`S`) stay enabled.
+- Threat classes out of scope by design: no network listener in phase 1
+  (serve is deferred), no multi-user concerns, no untrusted third-party data.
+
+---
+
+### 4e. DATA & PRIVACY
+
+This section is the product. The moat is "your prompt history never leaves
+your machine"; every decision below defends it.
+
+- **PII inventory**: prompt content is treated as PII-adjacent in bulk (it
+  contains project details, health context, personal habits). Stored only in
+  the local cache DB, derived from stores the user already has.
+- **Egress policy**: prompt content is sent to exactly one place: the
+  configured analysis endpoint. `LocalLLM` refuses any base URL that is not
+  localhost or RFC1918 unless `allow_remote = true` is set explicitly in
+  config. This exists because the llm-api gateway can fall back to
+  OpenRouter: pointing prompt-coach at a gateway is only safe if that
+  gateway's routing is pinned local, and the guard makes the user say so out
+  loud. The default (direct desktop Ollama at 192.168.1.123) is plain HTTP
+  on the LAN; acceptable in this homelab, stated here so it is a choice.
+- **Logging**: prompt content is never written to logs, stdout diagnostics,
+  or error messages. Counts and hashes only.
+- **Retention & erasure**: `rm -rf ~/.cache/prompt-coach/` removes every
+  derived artifact. Source stores are never modified.
+- **Config hygiene**: config.toml holds no cloud API keys.
+
+---
+
+### 5. DESIGN SPEC
+
+N/A: no visual surface. The report's information design (section order,
+tables, segment side-by-side) is fixed in the T27 template contract.
+
+---
+
+### 6. BUILD PLAN
+
+All tasks: Model = Claude Code (user decision: no local-model routing for the
+build). Sampling = temp 0 equivalent for all code tasks. Common escalation
+rule: if a task needs a fact not in this blueprint (a schema column, a JSONL
+field, a path), stop and check the live system or ask; do not invent.
+Common self-check (A10): after writing a file, re-read it; run the Verify
+command before marking the task done in STATUS.md.
+
+Docs tasks first (they are the contract the code tasks execute against), then
+content acquisition early (stores + cache), then analysis, then surface.
+
+---
+
+**T1: Rewrite BLUEPRINT.md (this document)**
+- Role: Architect · Reasoning: think
+- Description: replace v1 with this structure, correcting all store facts,
+  because every downstream task treats the blueprint as ground truth and v1's
+  invented schema would propagate into code.
+- Input: blueprint-orchestration + prompting-standards skills; verified facts.
+- Output contract: this file, all mandatory sections present or N/A'd.
+- Verify: `! grep -q $'\u2014' BLUEPRINT.md && grep -q 'state.db' BLUEPRINT.md
+  && ! grep -q 'data/sessions[.]db' BLUEPRINT.md`
+
+**T2: Correct AGENTS.md**
+- Role: Architect · Reasoning: no_think
+- Description: fix store path/schema facts, remove sqlalchemy/aiosqlite/
+  FastAPI phase-1 claims and the `--profile` implication, purge em dashes,
+  because agents read AGENTS.md before this blueprint and stale facts there
+  defeat the correction.
+- Output contract: updated AGENTS.md only.
+- Verify: `! grep -q $'\u2014' AGENTS.md && grep -q '.hermes/state.db'
+  AGENTS.md && ! grep -qi aiosqlite AGENTS.md`
+
+**T3: Create STATUS.md**
+- Role: Architect · Reasoning: no_think
+- Description: task table T1-T34 all pending, phase summary, blockers section,
+  llm-api house format, so every role records progress in one place.
+- Output contract: STATUS.md only. Plain English, no section-number
+  cross-references.
+- Verify: `test $(grep -c 'T[0-9]' STATUS.md) -ge 34`
+
+**T4: Create DECISIONS.md**
+- Role: Architect · Reasoning: no_think
+- Description: seed with the six decisions of record (store correction;
+  phase-1 scope; sync + stdlib sqlite3; Claude executes all; local-only LLM
+  guard; machine-prompt segmentation), each with trigger/decision/why/
+  affects/decided-by, so future sessions inherit the reasoning, not just the
+  outcome.
+- Output contract: DECISIONS.md only. Plain English in Affects fields.
+- Verify: `test $(grep -c '^## 2026' DECISIONS.md) -ge 6`
+
+**T5: Prune pyproject.toml**
+- Role: Developer · Reasoning: no_think
+- Description: remove sqlalchemy, aiosqlite, pytest-asyncio and the
+  asyncio_mode pytest setting (decision: sync + stdlib sqlite3), because dead
+  heavyweight deps invite accidental use and slow `uv sync`.
+- Output contract: pyproject.toml only.
+- Verify: `uv sync && uv run prompt-coach --help && ! uv run python -c
+  'import sqlalchemy' 2>/dev/null`
+
+**T6: models.py**
+- Role: Developer · Reasoning: no_think
+- Description: the shared dataclasses/enums from section 4.6 (Prompt,
+  SourceKind, PromptOrigin, StoreInfo, SyncStats, StyleMetrics, RuleScore,
+  RubricSummary, PatternReport, ReportData), because every other module
+  imports its types from here and nowhere else.
+- Output contract: src/prompt_coach/models.py only.
+- Verify: `uv run python -c "from prompt_coach.models import Prompt,
+  PromptOrigin, SourceKind, StyleMetrics"`
+
+**T7: config.py**
+- Role: Developer · Reasoning: no_think
+- Description: load order env `PROMPT_COACH_*` > `~/.config/prompt-coach/
+  config.toml` (tomllib) > defaults (base_url http://192.168.1.123:11434/v1,
+  model qwen3-coder:30b, allow_remote false, cache dir XDG), returning a
+  frozen Config object, because every entry point needs one canonical config.
+- Output contract: src/prompt_coach/config.py only.
+- Verify: `uv run python -c "from prompt_coach.config import load_config;
+  c=load_config(); print(c.llm.base_url, c.llm.model)"` prints the defaults.
+
+**T8: stores/base.py**
+- Role: Developer · Reasoning: no_think
+- Description: SessionStore Protocol + shared helpers (machine-classifier
+  regex lives here so hermes and json_import share it), per section 4.6.
+- Output contract: src/prompt_coach/stores/base.py only.
+- Verify: `uv run python -c "from prompt_coach.stores.base import
+  SessionStore, classify_origin; assert
+  classify_origin('TASK: build X').value=='machine'"`
+
+**T9: stores/hermes.py**
+- Role: Developer · Reasoning: think
+- Description: read-only reader per section 4.2 (mode=ro URI, active=1,
+  compacted=0, unixepoch to UTC, origin classification), returning
+  StoreInfo(unavailable, reason) rather than raising when the DB is absent
+  or locked, because report must survive missing stores.
+- Input: T6, T8.
+- Output contract: src/prompt_coach/stores/hermes.py only.
+- Verify: `uv run python -c "from prompt_coach.stores.hermes import
+  HermesStore; i=HermesStore().discover(); print(i)"` shows available=True
+  and >= 62 sessions against the live DB, with no write to it.
+- Escalate if: live schema differs from section 4.2.
+
+**T10: tests/test_stores_hermes.py**
+- Role: Tester · Reasoning: no_think
+- Description: build a minimal state.db clone in tmp_path in-test (no binary
+  fixture files, so the schema under test is visible in the test source);
+  cover: user rows extracted, assistant/tool rows excluded, active=0 and
+  compacted=1 excluded, `TASK:` row classified machine, absent DB gives
+  available=False.
+- Output contract: tests/test_stores_hermes.py only.
+- Verify: `uv run pytest tests/test_stores_hermes.py -q`
+
+**T11: stores/claude_code.py**
+- Role: Developer · Reasoning: think
+- Description: streaming JSONL reader per section 4.3: iter_files over
+  ~/.claude/projects, iter_file yielding (byte_offset_after_line, Prompt)
+  to power incremental resync, `parse_line` implementing the five filters
+  exactly, malformed lines skipped and counted. This is the largest corpus
+  and the trickiest filter set; the filters are the spec, invent nothing.
+- Input: T6, T8.
+- Output contract: src/prompt_coach/stores/claude_code.py only.
+- Verify: `uv run python -c "from prompt_coach.stores.claude_code import
+  ClaudeCodeStore; s=ClaudeCodeStore(); f=next(s.iter_files());
+  print(sum(1 for _ in s.iter_file(f)))"` runs clean on a real transcript.
+- Escalate if: a live transcript contains a user line shape the five filters
+  cannot classify confidently.
+
+**T12: tests/test_stores_claude_code.py**
+- Role: Tester · Reasoning: no_think
+- Description: inline tmp_path JSONL fixtures covering: typed human kept;
+  sidechain, non-human origin, non-typed, command echo, bare system-reminder
+  all rejected; content-block array flattened; inline system-reminder
+  stripped; malformed line skipped; offset resume yields only new lines.
+- Output contract: tests/test_stores_claude_code.py only.
+- Verify: `uv run pytest tests/test_stores_claude_code.py -q`
+
+**T13: stores/json_import.py**
+- Role: Developer · Reasoning: no_think
+- Description: v1 JSON format reader (section 4.4) mapping user messages to
+  Prompts with machine classification via the shared classifier.
+- Output contract: src/prompt_coach/stores/json_import.py only.
+- Verify: `uv run python -c` round-trip on an inline dict (one session, two
+  user messages, one `TASK:` message classified machine).
+
+**T14: Populate tests/fixtures/sample_sessions.json**
+- Role: Tester · Reasoning: no_think
+- Description: 6+ sessions with deliberately varied styles (vague one-liner;
+  explicit prompt with output contract and example; long unstructured wall;
+  iterative refinement chain; machine TASK spec; structured-output request),
+  because metrics/rubric tests need known-answer inputs.
+- Output contract: tests/fixtures/sample_sessions.json only (currently []).
+- Verify: `uv run python -c "import json; d=json.load(open(
+  'tests/fixtures/sample_sessions.json')); assert len(d)>=6"`
+
+**T15: tests/test_stores_json.py**
+- Role: Tester · Reasoning: no_think
+- Output contract: tests/test_stores_json.py only, driven by the T14 fixture.
+- Verify: `uv run pytest tests/test_stores_json.py -q`
+
+**T16: cache.py**
+- Role: Developer · Reasoning: think
+- Description: CacheDB per sections 4.5/4.6: schema creation (0600),
+  incremental sync using file_state offsets for claude-code and max-timestamp
+  watermark for hermes, fork dedupe, FTS5 external-content index kept in
+  sync, llm_cache get/put, prompt query API. Keystone module; everything
+  downstream reads through it.
+- Input: T6, T8 (T9/T11 interfaces; sync accepts any SessionStore).
+- Output contract: src/prompt_coach/cache.py only.
+- Verify: `uv run python -c` script: temp-dir CacheDB, sync a fake in-memory
+  store twice, assert counts stable (idempotent) and FTS search hits.
+
+**T17: tests/test_cache.py**
+- Role: Tester · Reasoning: no_think
+- Description: idempotent resync, offset resume after file growth, rewritten
+  file re-parse, fork dedupe by uuid and by (hash, timestamp), llm_cache
+  round-trip and template-version invalidation, FTS search, since/origin/
+  source filters.
+- Output contract: tests/test_cache.py only.
+- Verify: `uv run pytest tests/test_cache.py -q`
+
+**T18: llm/client.py**
+- Role: Developer · Reasoning: think
+- Description: LocalLLM per section 4.6 on the sync openai client:
+  constructor guard raising on non-private base_url without allow_remote
+  (privacy requirement 4e); available() via GET models with 2s timeout;
+  complete_json parsing/validating and re-prompting once with the parse
+  error appended (prompting-standards B5), then raising LLMUnavailable.
+- Input: T7.
+- Output contract: src/prompt_coach/llm/client.py only.
+- Verify: `uv run python -c` asserting the guard raises for
+  https://api.openai.com/v1 and available() returns a bool without raising
+  when the desktop is offline.
+
+**T19: llm/prompts.py**
+- Role: Developer · Reasoning: think
+- Description: versioned templates RUBRIC_JUDGE_V1, PATTERN_MAP_V1,
+  PATTERN_REDUCE_V1, QUERY_ANSWER_V1. Each: task instruction up top, fenced
+  data in the middle, JSON output contract restated at the end (A11), a
+  worked example of the expected JSON, and "answer only from the provided
+  prompts; say cannot-determine rather than invent" grounding (A8). Template
+  version strings feed the llm_cache key.
+- Output contract: src/prompt_coach/llm/prompts.py only.
+- Verify: `uv run python -c` formats each template with sample args and
+  checks the version constants exist.
+
+**T20: tests/test_llm_client.py**
+- Role: Tester · Reasoning: no_think
+- Description: respx-mocked: happy JSON; malformed JSON then valid on
+  re-prompt (asserts exactly two calls); timeout raises LLMUnavailable;
+  guard accepts localhost/192.168.x, rejects public hosts, allows with
+  allow_remote=True.
+- Output contract: tests/test_llm_client.py only.
+- Verify: `uv run pytest tests/test_llm_client.py -q`
+
+**T21: analysis/metrics.py**
+- Role: Developer · Reasoning: think
+- Description: deterministic StyleMetrics per segment (human/machine/all):
+  avg/median estimated tokens (chars/4), prompts per session, refinement
+  rate (sessions with >1 user prompt), example rate, constraint rate,
+  structured-output rate, first-message content ratio. Pure functions,
+  no I/O, exact and repeatable (this is the "vs baseline" anchor for
+  phase-2 trends).
+- Input: T6.
+- Output contract: src/prompt_coach/analysis/metrics.py only.
+- Verify: `uv run python -c` on three hand-built prompts asserting exact
+  values.
+
+**T22: tests/test_metrics.py**
+- Role: Tester · Reasoning: no_think
+- Output contract: tests/test_metrics.py only, using the T14 fixture via the
+  json_import store for realistic shapes plus hand-built edge cases (empty
+  corpus, single prompt, all-machine corpus).
+- Verify: `uv run pytest tests/test_metrics.py -q`
+
+**T23: analysis/rubric.py**
+- Role: Developer · Reasoning: think
+- Description: A1-A13 scoring. Deterministic checks corpus-wide (A4
+  structure, A5 output-contract markers, A6 example presence, A11 length
+  placement). LLM judge (RUBRIC_JUDGE_V1, 5 prompts/call, 1,500-char
+  truncation) on a seeded stratified sample for judgement rules (A1, A2, A3,
+  A8). APPLICABILITY map: A7/A12/A13 N/A except orchestration-shaped
+  prompts; report states per-rule coverage so N/A is visible, never a silent
+  zero. aggregate() produces per-rule means + best/worst exemplar refs,
+  split human vs machine (the machine segment audits the orchestration
+  pipeline's own task authoring).
+- Input: T6, T16, T18, T19.
+- Output contract: src/prompt_coach/analysis/rubric.py only.
+- Verify: `uv run python -c` scoring one strong and one weak prompt
+  deterministically; strong outscores weak on A4/A5.
+- Escalate if: a rule cannot be honestly scored from prompt text alone:
+  mark it N/A in APPLICABILITY with a comment, do not fake a heuristic.
+
+**T24: tests/test_rubric.py**
+- Role: Tester · Reasoning: no_think
+- Description: applicability map, deterministic scores on known prompts,
+  mocked-LLM judge merge, aggregation by origin, sample determinism by seed.
+- Output contract: tests/test_rubric.py only.
+- Verify: `uv run pytest tests/test_rubric.py -q`
+
+**T25: analysis/patterns.py**
+- Role: Developer · Reasoning: think
+- Description: detect_patterns(prompts, llm, cache, sample_size=300,
+  batch_size=25): seeded stratified sample (source x origin x recency);
+  map = PATTERN_MAP_V1 per batch (topics, habits, weaknesses, one exemplar
+  each); reduce = PATTERN_REDUCE_V1 over digests into strengths / growth
+  areas / notable patterns / topic distribution. Every call goes through
+  llm_cache. Payloads capped ~8k estimated tokens.
+- Input: T6, T16, T18, T19.
+- Output contract: src/prompt_coach/analysis/patterns.py only.
+- Verify: `uv run python -c` with a stub LLM asserting map call count ==
+  ceil(sample/batch) and reduce output shape.
+- Escalate if: desktop Ollama's effective num_ctx proves smaller than the 8k
+  payload budget; shrink batch_size, record in DECISIONS.md.
+
+**T26: tests/test_patterns.py**
+- Role: Tester · Reasoning: no_think
+- Description: sampling determinism with seed; caching short-circuits repeat
+  calls (stub LLM call counter); graceful path when llm unavailable.
+- Output contract: tests/test_patterns.py only.
+- Verify: `uv run pytest tests/test_patterns.py -q`
+
+**T27: report/templates/report.md.j2**
+- Role: Developer · Reasoning: no_think
+- Description: sections in order: Summary; Style Profile (human vs machine
+  columns); Rubric Scorecard (per-rule score, coverage, N/A visible);
+  Coaching Insights (Strengths / Growth Areas / Notable Patterns); Topic
+  Breakdown; Sessions This Period; plus a degraded-mode banner block when
+  LLM sections are absent.
+- Output contract: the template file only.
+- Verify: `uv run python -c` renders it with a minimal context and the
+  section headings appear.
+
+**T28: report/generator.py**
+- Role: Developer · Reasoning: no_think
+- Description: build_report(ReportData) -> markdown string; assembles
+  template context; when LLM results are None, emits the banner and skips
+  LLM sections cleanly (the no-model path is the common case: the desktop
+  GPU is often off).
+- Input: T21, T23, T25 types, T27.
+- Output contract: src/prompt_coach/report/generator.py only.
+- Verify: `uv run python -c` renders both full and degraded variants.
+
+**T29: tests/test_report.py**
+- Role: Tester · Reasoning: no_think
+- Verify: `uv run pytest tests/test_report.py -q`
+
+**T30: query.py**
+- Role: Developer · Reasoning: think
+- Description: answer(question, cache, llm, k=12): FTS5 top-k retrieval,
+  QUERY_ANSWER_V1 with citations (source, session id, date); llm=None path
+  prints the matching snippets with refs instead.
+- Input: T16, T18, T19.
+- Output contract: src/prompt_coach/query.py only.
+- Verify: `uv run python -c` with stub cache+LLM returns an answer containing
+  a citation; with llm=None returns snippets.
+
+**T31: Rewrite cli.py**
+- Role: Developer · Reasoning: think
+- Description: wire everything: `discover` (StoreInfo table), `stats`
+  (metrics table, `--since`), `report` (`--since --limit --sample --no-llm
+  --refresh --out`), `query`, `import` (via `@app.command("import")`: the
+  current `import_` produces a mangled command name), `cache sync|clear|
+  info`. No emojis (house style). `serve` prints "phase 2" and exits 1.
+  Store failures degrade per the section 2 failure story.
+- Input: all prior modules.
+- Output contract: src/prompt_coach/cli.py only (rewrite).
+- Verify: `uv run prompt-coach discover` lists hermes + claude-code with
+  real counts; `uv run prompt-coach report --no-llm --since 30d` prints a
+  report with the degraded banner when Ollama is off.
+
+**T32: tests/test_cli.py**
+- Role: Tester · Reasoning: no_think
+- Description: typer CliRunner over every command with stores/cache
+  redirected to tmp fixtures via env vars; asserts exit codes, degraded
+  banner, import round-trip.
+- Output contract: tests/test_cli.py only.
+- Verify: `uv run pytest tests/test_cli.py -q`
+
+**T33: Update README.md**
+- Role: Developer · Reasoning: no_think
+- Description: user-facing quick start matching the real command set and
+  privacy story; no em dashes.
+- Output contract: README.md only.
+- Verify: `grep -q 'prompt-coach report' README.md && ! grep -q $'\u2014'
+  README.md`
+
+**T34: Tester gate**
+- Role: Tester · Reasoning: think
+- Description: the closeout check against this blueprint.
+- Output contract: STATUS.md updated to complete (the only file written).
+- Verify (all must pass):
+  - `uv run pytest -q && uv run ruff check . && uv run black --check .`
+  - `uv run prompt-coach discover` shows both live stores with counts
+  - `uv run prompt-coach report --no-llm --since 30d` succeeds, < 60s
+  - em-dash gates on all four docs; `! grep -rq 'data/sessions[.]db' *.md`
+  - NFR spot-checks from section 4c (sync wall-clock, memory sanity)
+  - when the desktop is on: `uv run prompt-coach report --since 7d
+    --sample 20` renders rubric scorecard + patterns from the live model
+
+---
+
+### 7. MODEL STRATEGY
+
+**Build execution**: Claude Code executes every task, interactively in this
+session or via `claude -p` one-shots (user decision 2026-07-20; supersedes
+the multi-tier routing in v1 and aligns with the pending 2-tier proposal in
+hermes-skills DECISIONS.md). No hermes -z local-model routing for the build.
+
+**Runtime analysis model** (a product config, not build routing):
+- Default: qwen3-coder:30b via direct Ollama, http://192.168.1.123:11434/v1.
+- Optional: llm-api gateway on localhost:8080/v1, only with local-pinned
+  routing; the allow_remote guard enforces the conversation (section 4e).
+- No model reachable: deterministic-only mode, clearly bannered. This path
+  is first-class; the desktop GPU is frequently off.
+- Prompting per prompting-standards: temp 0, JSON contracts in templates,
+  one evidence-adding re-prompt then fail (B5), payload caps (section 4c).
+
+---
+
+### 8. DEPENDENCY GRAPH
+
+```
+T1 -> T2, T3, T4                     (docs; T2-T4 parallel after T1)
+T5 -> T6 -> T7
+T6 -> T8
+T8 -> T9  -> T10                     (stores branch)
+T8 -> T11 -> T12
+T8 -> T13 -> T15;  T14 after T5 (feeds T15, T22)
+T6, T8 -> T16 -> T17                 (cache branch)
+T7 -> T18 -> T20;  T6 -> T19         (llm branch)
+T6 -> T21 -> T22                     (metrics branch)
+T6, T16, T18, T19 -> T23 -> T24
+T6, T16, T18, T19 -> T25 -> T26      (parallel with T23)
+T6 -> T27 -> T28 -> T29              (T28 also needs T21/T23/T25 types)
+T16, T18, T19 -> T30
+all modules -> T31 -> T32 -> T33 -> T34
+```
+
+Stores, cache, llm, and metrics branches are parallelisable after T8.
+
+---
+
+### 9. RISK REGISTER
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| Gateway privacy leak: llm-api falls back to OpenRouter with prompt content | Medium if gateway used | Critical (breaks the product promise) | allow_remote guard in LocalLLM; direct-Ollama default; documented in 4e |
+| Ollama effective num_ctx smaller than assumed (server unverified, was off during design) | Medium | Medium (truncated analyses) | conservative 8k payload cap; escalate-if on T25; check num_ctx before tuning |
+| Hermes schema drift (we do not own state.db) | Medium over time | Medium | raw SQL touching few columns; T9 escalates on mismatch; store errors degrade, never crash |
+| Claude Code JSONL format drift across versions | Medium over time | Medium | strict-but-skipping parser (unknown lines counted, not fatal); filters tested in T12 |
+| Session-fork double counting skews metrics | High without mitigation | Medium | uuid/(hash,timestamp) dedupe in cache; tested in T17 |
+| Model availability: desktop GPU off | High (observed during design) | Low by design | deterministic-only mode is first-class with banner |
+| Cost escalation | N/A | - | local inference only; build uses existing Claude subscription |
+| Data/state risk: cache corruption | Low | Low | cache is disposable; delete and resync |
+
+---
+
+### 10. ROLLBACK PLAN
+
+| After completing... | To rollback... |
+|----|-----|
+| Any single task | `git revert` the task's commit; tasks are one-output so reverts are clean |
+| Docs phase (T1-T4) | `git checkout` the v1 docs from history |
+| Any point | `rm -rf ~/.cache/prompt-coach/` resets all derived state; source stores are never written, so there is nothing else to undo |
+| Full build | reset to the pre-build tag; the repo returns to scaffold |
+
+### 10b. DEPLOYMENT & RELEASE
+
+N/A: local tool, run from the repo via `uv run prompt-coach` or installed
+with `uv tool install .`. Nothing is deployed anywhere.
+
+### 10c. OBSERVABILITY
+
+N/A: interactive CLI; failures surface directly. One convention: `--verbose`
+prints per-store sync counts and LLM cache hit rates (counts only, never
+content).
+
+### 10d. DOCUMENTATION
+
+| Deliverable | Task | Owner |
+|-------------|------|-------|
+| BLUEPRINT.md (this) | T1 | Architect |
+| AGENTS.md corrections | T2 | Architect |
+| STATUS.md | T3 | Architect |
+| DECISIONS.md | T4 | Architect |
+| README.md quick start | T33 | Developer |
+
+No API docs (no API in phase 1); no runbook (nothing operated).
+
+---
+
+### 11. ROLE HANDOFF PROMPTS
+
+Claude Code executes everything, so handoffs are session-boot prompts rather
+than paste-and-relay cards.
+
+```
+HANDOFF: DEVELOPER (also covers Tester tasks)
+===========================================================
+Read AGENTS.md, then BLUEPRINT.md sections 3, 4, 6, 8 of
+~/projects/prompt-coach. Work the build plan in dependency order from
+STATUS.md, one task at a time. For each task: implement exactly the output
+contract (one file), run its Verify command, update STATUS.md, commit as
+"T<n>: <name>". Never write to ~/.hermes/state.db or ~/.claude/projects.
+If a fact is missing from the blueprint, inspect the live system or ask;
+do not invent. Escalate per each task's Escalate-if line.
+```
+
+```
+HANDOFF: TESTER GATE (T34)
+===========================================================
+Read BLUEPRINT.md sections 2, 4c, 6 (T34) and 12. Run every T34 check
+verbatim. Any failure: record in STATUS.md blockers, do not mark complete.
 ```
 
 ---
 
-### 9. IMPLEMENTATION PLAN
+### 12. POST-BUILD CHECKLIST
 
-#### Phase 1 — Core (Tasks 1-6)
-
-**Task 1: Project skeleton + config**
-- Create pyproject.toml with deps (typer, openai, httpx, sqlalchemy, aiosqlite, jinja2, pydantic)
-- Create CLI entry point with `--help`
-- Create config loader (env vars + TOML)
-- Verify: `uv sync && uv run prompt-coach --help` works
-
-**Task 2: Session store abstraction + Hermes reader**
-- Implement `Session` dataclass (id, title, timestamp, messages, store)
-- Implement `SessionStore` protocol
-- Implement Hermes SQLite reader (reads from ~/.hermes/data/sessions.db)
-- Verify: `prompt-coach discover` shows Hermes store with session count
-
-**Task 3: Style metrics calculator**
-- Implement rule-based metrics (prompt length, refinement rate, example rate, etc.)
-- Write tests with sample session data
-- Verify: metrics output is deterministic and correct
-
-**Task 4: Local LLM client**
-- Implement OpenAI-compatible client for local Ollama
-- Implement prompt templates for topic clustering and pattern detection
-- Graceful fallback if no local model is available (rule-based only)
-- Verify: can call local model and get structured output
-
-**Task 5: Topic clustering + pattern detection**
-- Implement LLM-based topic clustering per session
-- Implement LLM-based pattern detection across sessions
-- Implement report generator (markdown output)
-- Verify: `prompt-coach report` produces a readable report
-
-**Task 6: Stats command + JSON import**
-- Implement `prompt-coach stats` (compact table output)
-- Implement JSON import format
-- Verify: `prompt-coach stats --import ~/exports/sessions.json` works
-
-#### Phase 2 — Advanced (Tasks 7-9)
-
-**Task 7: Trend analysis**
-- Store snapshots of metrics over time
-- Compare current vs baseline in report
-- Implement `--since` filtering
-
-**Task 8: Query command**
-- Implement `prompt-coach query "..."` — natural language query against session history
-- Uses local LLM to answer questions about past conversations
-- Verify: "what did I work on last week?" returns relevant sessions
-
-**Task 9: Serve command (read-only HTTP API)**
-- FastAPI app with GET /v1/sessions, /v1/report, /v1/health
-- Verify: `curl localhost:9090/v1/health` returns OK
+- [ ] All T1-T33 Verify commands pass; T34 gate green
+- [ ] Coverage matrix: every row satisfied or N/A'd
+- [ ] No hardcoded secrets; config holds no cloud keys
+- [ ] File structure matches section 4.1
+- [ ] AGENTS.md canonical, facts correct, no em dashes in any doc
+- [ ] User stories: happy, edge (no LLM), failure (missing store) all verified
+- [ ] NFR targets met on the real corpus (section 4c)
+- [ ] Privacy: egress guard tested (T20); no content in logs; erasure = cache delete
+- [ ] Store read-only: no code path opens a source store writable
+- [ ] STATUS.md reflects completion; DECISIONS.md current
 
 ---
 
-### 10. TESTING STRATEGY
+### 13. PROGRESS TRACKING
 
-| Layer | Tool | What to test |
-|-------|------|-------------|
-| Metrics | pytest | Deterministic, no LLM. Test with sample sessions. |
-| Stores | pytest + aiosqlite | Hermes reader with fixture DB, JSON reader with fixture files |
-| Report | pytest | Markdown output contains expected sections |
-| CLI | pytest | Typer test app, verify command parsing and output |
-| LLM | pytest (mock) | Mock httpx/OpenAI to verify prompt templates are correct |
-| E2E | manual | Point at real Hermes DB, verify output makes sense |
+`STATUS.md` at the repo root (created in T3). Every task updates it. Plain
+English only, no section-number references.
 
-**Test fixtures:**
-- `tests/fixtures/sample_sessions.json` — 5-10 sessions with varied prompting styles
-- `tests/fixtures/hermes_test.db` — minimal Hermes SQLite clone with 3-5 sessions
+### 14. DECISIONS & CHANGE LOG
+
+`DECISIONS.md` at the repo root (created in T4, seeded with the six
+decisions of record). Append on any scope change, spec patch, or assumption
+that turns out wrong.
 
 ---
 
-### 11. DEPENDENCIES
+### 15. FUTURE DIRECTIONS (phase 2+, explicitly out of scope now)
 
-```toml
-dependencies = [
-    "typer>=0.15,<0.16",
-    "openai>=1.68,<2",
-    "httpx>=0.28,<0.29",
-    "sqlalchemy>=2.0.36,<2.1",
-    "aiosqlite>=0.20,<0.21",
-    "jinja2>=3.1,<4",
-    "pydantic>=2.10,<3",
-    "tomli>=2.2,<3",  # Python <3.11 compat
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.3,<9",
-    "pytest-asyncio>=0.25,<0.26",
-    "ruff>=0.9,<0.10",
-    "black>=24.10,<25",
-    "respx>=0.22,<0.23",  # mock httpx for LLM client tests
-]
-```
-
----
-
-### 12. CONFIGURATION
-
-```toml
-# ~/.config/prompt-coach/config.toml
-
-[llm]
-# Default: direct Ollama
-api_base = "http://192.168.1.123:11434/v1"
-# Or via llm-api gateway:
-# api_base = "http://localhost:8080/v1"
-# api_key = "sk-..."  # only needed for llm-api gateway
-
-model = "qwen3-coder:30b"  # default analysis model
-
-[stores]
-# Hermes DB path (auto-detected if not set)
-hermes_db = "~/.hermes/data/sessions.db"
-
-[report]
-# Default report format
-format = "markdown"  # or "json"
-include_sessions = true  # include session list in report
-max_sessions = 50  # max sessions to analyse per report
-```
-
----
-
-### 13. EDGE CASES & PITFALLS
-
-**Empty session store:** `discover` finds no stores → "No session stores found.
-Use --import to load external data."
-
-**No local LLM available:** All LLM-based analysis degrades gracefully to
-rule-based metrics only. Report includes: "LLM unavailable — running
-rule-based analysis only."
-
-**Very large history:** Processing 1000+ sessions could be slow. Default
-limit to 50, add `--limit` and `--since` flags. Show progress bar.
-
-**Encrypted/obfuscated stores:** Not supported. Only plaintext session stores.
-
-**Multi-profile:** Hermes supports profiles. Discover should list all
-profiles and let the user select with `--profile`.
-
-**Non-English prompts:** Analysis should work with any language the local
-LLM supports. Report language matches the prompt language.
-
-**Privacy-critical:** Never log prompt content to disk. Never send data
-to external APIs. The config file should not store API keys for external
-services (only for local Ollama/gateway auth).
-
----
-
-### 14. GIT SETUP
-
-```bash
-cd ~/projects/prompt-coach
-git init
-git add .
-git commit -m "Initial scaffold: project skeleton, AGENTS.md, BLUEPRINT.md"
-# Remote TBD — likely GitHub under aawobdev/prompt-coach
-```
-
----
-
-### 15. FUTURE DIRECTIONS (post-Phase 2)
-
-- **Hermes skill integration** — a `prompt-coach-report` skill that runs
-  weekly via cron, delivering a personal coaching report to Slack
-- **OpenAI export format** — read ChatGPT conversation exports
-- **Claude export format** — read Claude.ai conversation exports
-- **Prompt library extraction** — automatically extract best prompts as
-  reusable templates, push to a shared skill repo
-- **Knowledge graph** — extract facts/decisions from conversations into a
-  searchable personal knowledge base
+- Trend analysis: metric snapshots over time, "vs baseline" deltas
+- `serve`: read-only HTTP API (FastAPI returns to the dependency list then)
+- OpenWebUI store (remote, needs auth) and llm-api usage-log enrichment
+- OpenAI/Claude.ai export readers
+- Hermes skill: weekly coaching report via cron to Slack
+- Prompt library extraction: best prompts as reusable templates
