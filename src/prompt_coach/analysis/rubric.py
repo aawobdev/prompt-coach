@@ -69,7 +69,8 @@ _SAMPLING = re.compile(
     r"\b(temperature|sampling|temp\s*[=≈:]|deterministic output)\b", re.IGNORECASE
 )
 _OUTPUT_CONTRACT = re.compile(
-    r"\b(output|return|respond with|produce)\b.{0,40}\b(only|exactly|format|json|table|file|signature)\b",
+    r"\b(output|return|respond with|produce)\b.{0,40}"
+    r"\b(only|exactly|format|json|table|file|signature)\b",
     re.IGNORECASE | re.DOTALL,
 )
 

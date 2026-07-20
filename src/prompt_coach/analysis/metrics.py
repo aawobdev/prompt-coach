@@ -19,12 +19,14 @@ _EXAMPLE = re.compile(
 )
 # Signals explicit constraints/limits.
 _CONSTRAINT = re.compile(
-    r"\b(must|only|never|always|constraint|require[sd]?|max|min|limit|exactly|no more than|at least|stdlib only|do not|don't)\b",
+    r"\b(must|only|never|always|constraint|require[sd]?|max|min|limit|exactly"
+    r"|no more than|at least|stdlib only|do not|don't)\b",
     re.IGNORECASE,
 )
 # Signals a requested output shape.
 _STRUCTURED = re.compile(
-    r"\b(json|yaml|csv|markdown table|table with|as a table|bullet(?:ed)? list|numbered list|schema|output format|format:|return only|respond with only)\b",
+    r"\b(json|yaml|csv|markdown table|table with|as a table|bullet(?:ed)? list"
+    r"|numbered list|schema|output format|format:|return only|respond with only)\b",
     re.IGNORECASE,
 )
 

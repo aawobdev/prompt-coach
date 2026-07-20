@@ -63,7 +63,6 @@ class StubLLM:
         self.calls += 1
         if self.fail:
             raise LLMUnavailable("down")
-        n = user.count('. """') + user.count('1. """')  # crude batch size probe
         return {str(i): dict(self.scores) for i in range(1, 10)}
 
 
