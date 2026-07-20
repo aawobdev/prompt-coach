@@ -19,7 +19,7 @@ Alistair.
 
 ## 2026-07-20 - Phase-1 scope: Hermes + Claude Code stores; OpenWebUI deferred
 
-**Trigger**: Claude Code history (`~/.claude/projects/*/*.jsonl`, 644
+**Trigger**: Claude Code history (`~/.claude/projects/*/*.jsonl`, 108 main
 transcripts, 691MB) dwarfs the Hermes corpus (62 sessions, 281 user
 messages), and v1 ignored it entirely. OpenWebUI's DB is remote (ollama VM)
 and needs auth.
@@ -99,3 +99,18 @@ complexity without coverage. Its FTS remains available for a possible later
 `--live` mode.
 **Affects**: Cache schema, query implementation.
 **Decided by**: Architect (Claude, on Plan-agent recommendation).
+
+## 2026-07-20 - Micro-replies excluded from rubric/pattern scoring, kept in metrics
+
+**Trigger**: first live sync surfaced that ~30% of hand-typed prompts are
+micro-replies ("1", "y", "continue"): real input, but not prompt writing.
+Scoring them against a prompt-authoring rubric drowned the signal (they would
+all score zero on every rule).
+**Decision**: prompts under 40 characters are excluded from rubric scoring
+and pattern sampling. They remain in the cache and in the style metrics,
+where the tiny median prompt length is itself honest coaching data.
+**Why**: the rubric measures how well prompts are written where there is a
+prompt to write; a wall of zero-scored acknowledgements is noise dressed as
+signal.
+**Affects**: rubric scoring, pattern sampling, rubric tests.
+**Decided by**: Tester gate finding (Claude), 2026-07-20.

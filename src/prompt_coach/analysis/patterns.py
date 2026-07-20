@@ -14,7 +14,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 
-from prompt_coach.analysis.rubric import stratified_sample
+from prompt_coach.analysis.rubric import _MIN_SCORABLE_CHARS, stratified_sample
 from prompt_coach.cache import CacheDB
 from prompt_coach.llm import prompts as tpl
 from prompt_coach.llm.client import LocalLLM
@@ -92,7 +92,8 @@ def detect_patterns(
     seed: int = 1337,
 ) -> PatternReport:
     """May raise LLMUnavailable; the caller decides how to degrade."""
-    sample = stratified_sample(prompts, sample_size, seed)
+    substantive = [p for p in prompts if len(p.content) >= _MIN_SCORABLE_CHARS]
+    sample = stratified_sample(substantive, sample_size, seed)
     digests = [
         _map_call(sample[i : i + batch_size], llm, cache) for i in range(0, len(sample), batch_size)
     ]

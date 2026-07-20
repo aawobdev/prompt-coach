@@ -165,3 +165,9 @@ class TestRunRubric:
     def test_no_llm_at_all(self, cache):
         summary = run_rubric([make(STRONG)], None, cache)
         assert summary.sampled_llm == 0
+
+    def test_micro_replies_excluded_from_scoring(self, cache):
+        micro = [make(c, session=f"m{i}", ref=str(i)) for i, c in enumerate(["1", "y", "gg"])]
+        summary = run_rubric([make(STRONG), *micro], None, cache)
+        by_rule = {r.rule: r for r in summary.rules}
+        assert by_rule["A5"].coverage == 1  # only the substantive prompt scored

@@ -68,7 +68,7 @@ Why it can exist at all: the gap between prompt optimizers (DSPy, promptfoo),
 observability tools (Langfuse, Helicone), and population research is a tool
 that studies the individual prompter. Nobody uploads their full prompt history
 to a SaaS, so the niche is only solvable local-first. The primary user already
-has the data (62 Hermes sessions, 644 Claude Code transcripts) and the local
+has the data (62 Hermes sessions, 108 Claude Code transcripts) and the local
 inference hardware.
 
 **Users**: primary is Alistair (power user: Hermes + Claude Code + llm-api +
@@ -260,7 +260,10 @@ the unified cache FTS covers retrieval (DECISIONS.md).
 
 #### 4.3 Store: Claude Code (verified against live transcripts 2026-07-20)
 
-Path: `~/.claude/projects/<project-slug>/<session-uuid>.jsonl`. 644 files,
+Path: `~/.claude/projects/<project-slug>/<session-uuid>.jsonl`. 108 main
+transcripts (536 further subagent transcripts nest deeper under
+`<session>/subagents/` and are excluded by design: they are machine traffic,
+the file-level counterpart of the isSidechain filter). Total tree 691MB,
 691MB. Each line is a JSON object. A hand-typed user prompt line looks like:
 
 ```json
@@ -359,7 +362,7 @@ is early in the build plan (T8-T17) per the skill.
 | Corpus | Location | Volume | Notes |
 |--------|----------|--------|-------|
 | Hermes | ~/.hermes/state.db | 62 sessions, 281 user msgs (2026-06-12 to 2026-07-17) | many are machine `TASK:` specs; segment |
-| Claude Code | ~/.claude/projects/ | 644 JSONL transcripts, 691MB | the primary corpus; needs the 5-filter parse |
+| Claude Code | ~/.claude/projects/ | 108 main JSONL transcripts (~1,351 prompts); 691MB tree incl. excluded subagent files | the primary corpus; needs the 5-filter parse |
 | JSON import | user-supplied | ad hoc | v1 format kept |
 | OpenWebUI | ollama VM, remote DB | deferred | phase 2 (DECISIONS.md) |
 | llm-api usage logs | llm-api Postgres | deferred | phase 2 enrichment |
@@ -791,7 +794,9 @@ content acquisition early (stores + cache), then analysis, then surface.
   - `uv run pytest -q && uv run ruff check . && uv run black --check .`
   - `uv run prompt-coach discover` shows both live stores with counts
   - `uv run prompt-coach report --no-llm --since 30d` succeeds, < 60s
-  - em-dash gates on all four docs; `! grep -rq 'data/sessions[.]db' *.md`
+  - em-dash gates on all four docs; `! grep -q 'data/sessions[.]db'
+    BLUEPRINT.md README.md` (AGENTS.md and DECISIONS.md may name the old
+    wrong path when warning about it or recording the correction)
   - NFR spot-checks from section 4c (sync wall-clock, memory sanity)
   - when the desktop is on: `uv run prompt-coach report --since 7d
     --sample 20` renders rubric scorecard + patterns from the live model

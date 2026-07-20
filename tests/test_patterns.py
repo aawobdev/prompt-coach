@@ -40,7 +40,7 @@ class StubLLM:
 
 
 def make(i: int) -> Prompt:
-    content = f"prompt number {i} about something"
+    content = f"prompt number {i}: please refactor the data loader and explain the tradeoffs"
     return Prompt(
         source=SourceKind.CLAUDE_CODE,
         session_id=f"s{i % 7}",

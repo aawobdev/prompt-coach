@@ -76,6 +76,7 @@ _OUTPUT_CONTRACT = re.compile(
 
 _LONG_PROMPT_CHARS = 800
 _A4_MIN_CHARS = 200
+_MIN_SCORABLE_CHARS = 40
 
 
 def prompt_ref(p: Prompt) -> str:
@@ -249,7 +250,14 @@ def run_rubric(
     sample_size: int = 150,
     seed: int = 1337,
 ) -> RubricSummary:
-    """Full rubric pass: deterministic corpus-wide, LLM on a sample when possible."""
+    """Full rubric pass: deterministic corpus-wide, LLM on a sample when possible.
+
+    Micro-replies ("1", "y", "continue") are real typed input but not prompt
+    writing; scoring them against a prompt-authoring rubric would drown the
+    signal (they are ~30% of the live human corpus). They stay in the metrics
+    (the tiny median IS coaching data) but are excluded here.
+    """
+    prompts = [p for p in prompts if len(p.content) >= _MIN_SCORABLE_CHARS]
     scores: list[RuleScore] = []
     for p in prompts:
         scores.extend(score_prompt_deterministic(p))
