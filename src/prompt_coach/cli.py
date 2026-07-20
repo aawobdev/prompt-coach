@@ -1,6 +1,5 @@
 """CLI entry point for prompt-coach."""
 
-
 import typer
 
 app = typer.Typer(
