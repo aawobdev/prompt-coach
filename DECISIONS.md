@@ -175,3 +175,18 @@ non-TTY plus a --plain flag.
 belong in `report`, which is already cached and bannered.
 **Affects**: CLI, report/dash rendering, tests.
 **Decided by**: Alistair (approved improved prompt), 2026-07-20.
+
+## 2026-07-21 - Default model switched to qwen3-coder-30b:latest (32k num_ctx)
+
+**Trigger**: phase-1/2 gates deferred the live-LLM smoke; pick-up item said
+to check the model's effective num_ctx before raising batch sizes.
+**Decision**: default model is now `qwen3-coder-30b:latest`, the desktop's
+derived tag with num_ctx 32768 baked in. The previous default
+`qwen3-coder:30b` has no num_ctx parameter, so it runs at the Ollama server
+default (4096, no OLLAMA_CONTEXT_LENGTH set on the desktop) and silently
+truncates pattern-map payloads (_MAX_PAYLOAD_CHARS 32000, roughly 8k tokens).
+**Why**: silent truncation corrupts pattern insights with no error surface;
+the derived tag is already the roster standard on this host.
+**Affects**: config.py DEFAULT_MODEL, README, AGENTS.md, BLUEPRINT sections
+4e/9/15.
+**Decided by**: Claude (Fable 5) during live smoke, 2026-07-21.

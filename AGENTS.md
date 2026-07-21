@@ -52,7 +52,7 @@ uv run prompt-coach query "what did I work on last week?"
 - Stdlib `sqlite3` for all DB access (read-only sources + local cache DB
   with FTS5). Synchronous code throughout: no ORM, no asyncio.
 - **openai** sync client to a local model only: direct Ollama
-  (`http://192.168.1.123:11434/v1`, default `qwen3-coder:30b`) or the
+  (`http://192.168.1.123:11434/v1`, default `qwen3-coder-30b:latest`, 32k num_ctx) or the
   llm-api gateway on localhost. The LLM client refuses non-private base URLs
   unless `allow_remote = true` is configured: the privacy guarantee depends
   on it.

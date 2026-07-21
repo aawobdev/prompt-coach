@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_API_BASE = "http://192.168.1.123:11434/v1"
-DEFAULT_MODEL = "qwen3-coder:30b"
+# The derived tag has num_ctx 32768 baked in; the base qwen3-coder:30b tag
+# runs at the Ollama server default (4096), which truncates pattern payloads.
+DEFAULT_MODEL = "qwen3-coder-30b:latest"
 
 
 @dataclass(frozen=True)

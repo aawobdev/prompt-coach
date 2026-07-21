@@ -180,7 +180,7 @@ pyproject (T5). Reversibility: a ThreadPoolExecutor around LLM calls is a
 contained later change if concurrency ever pays.
 
 **Decision 2: runtime analysis model is local-only, direct Ollama default.**
-Default `http://192.168.1.123:11434/v1`, model `qwen3-coder:30b`. The llm-api
+Default `http://192.168.1.123:11434/v1`, model `qwen3-coder-30b:latest` (num_ctx 32768 baked in; the base tag runs at the 4k server default). The llm-api
 gateway (`http://localhost:8080/v1`) is supported but guarded, because the
 gateway can route or fall back to cloud providers, which would silently break
 the privacy promise (section 4e). Config precedence: `PROMPT_COACH_*` env
@@ -514,7 +514,7 @@ content acquisition early (stores + cache), then analysis, then surface.
 - Role: Developer · Reasoning: no_think
 - Description: load order env `PROMPT_COACH_*` > `~/.config/prompt-coach/
   config.toml` (tomllib) > defaults (base_url http://192.168.1.123:11434/v1,
-  model qwen3-coder:30b, allow_remote false, cache dir XDG), returning a
+  model qwen3-coder-30b:latest, allow_remote false, cache dir XDG), returning a
   frozen Config object, because every entry point needs one canonical config.
 - Output contract: src/prompt_coach/config.py only.
 - Verify: `uv run python -c "from prompt_coach.config import load_config;
@@ -811,7 +811,7 @@ the multi-tier routing in v1 and aligns with the pending 2-tier proposal in
 hermes-skills DECISIONS.md). No hermes -z local-model routing for the build.
 
 **Runtime analysis model** (a product config, not build routing):
-- Default: qwen3-coder:30b via direct Ollama, http://192.168.1.123:11434/v1.
+- Default: qwen3-coder-30b:latest (32k num_ctx) via direct Ollama, http://192.168.1.123:11434/v1.
 - Optional: llm-api gateway on localhost:8080/v1, only with local-pinned
   routing; the allow_remote guard enforces the conversation (section 4e).
 - No model reachable: deterministic-only mode, clearly bannered. This path

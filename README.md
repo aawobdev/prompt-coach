@@ -58,7 +58,7 @@ No cloud API keys, no telemetry, no egress.
 `~/.config/prompt-coach/config.toml` (all optional), or env vars:
 
 - `PROMPT_COACH_API_BASE` - local LLM endpoint (default `http://192.168.1.123:11434/v1`)
-- `PROMPT_COACH_MODEL` - analysis model (default `qwen3-coder:30b`)
+- `PROMPT_COACH_MODEL` - analysis model (default `qwen3-coder-30b:latest`, 32k num_ctx baked in)
 - `PROMPT_COACH_HERMES_DB`, `PROMPT_COACH_CLAUDE_PROJECTS`, `PROMPT_COACH_CACHE_DIR`
 
 ## Docs

@@ -1,21 +1,31 @@
 # Project Status - prompt-coach
-Last updated: 2026-07-20 by Claude (Fable 5), daily wrap-up: phases 1 and 2
-both complete and gated in a single day (blueprint v2 rewrite through dash)
+Last updated: 2026-07-21 by Claude (Fable 5): live-LLM smoke passed,
+default model switched to qwen3-coder-30b:latest (see DECISIONS.md)
+
+## Live-LLM smoke results (2026-07-21)
+
+- `report --since 7d --sample 20` passed against live Ollama: rubric
+  scorecard renders real human/machine scores, coaching insights and topic
+  breakdown render. 66s wall clock.
+- num_ctx finding: base tag `qwen3-coder:30b` has no num_ctx parameter and
+  no OLLAMA_CONTEXT_LENGTH on the desktop, so it ran at the 4096 server
+  default - below the ~8k-token pattern payloads (silent truncation).
+  Default model changed to `qwen3-coder-30b:latest` (num_ctx 32768 baked
+  in). Batch sizes can now be raised safely up to ~32k-token payloads if
+  ever needed.
+- Note: `--sample` sizes only the rubric sample; patterns take their own
+  stratified sample (110 prompts here). By design.
 
 ## Next session pick-up list
 
-1. Live-LLM smoke (needs desktop Ollama on):
-   `uv run prompt-coach report --since 7d --sample 20` - verify rubric judge
-   and patterns render; check the model's effective num_ctx before raising
-   batch sizes.
-2. ChatGPT importer verification: run `prompt-coach import <export.zip>`
+1. ChatGPT importer verification: run `prompt-coach import <export.zip>`
    against a real export, then clear the UNVERIFIED markers here and in
    BLUEPRINT.md section 16.2.
-3. Optional UX: sync throttle or --no-sync flag (dash pays ~17s of /mnt/c
+2. Optional UX: sync throttle or --no-sync flag (dash pays ~17s of /mnt/c
    stat overhead per run).
-4. Optional: machine-prompt classifier misses cron-generated curator prompts
+3. Optional: machine-prompt classifier misses cron-generated curator prompts
    ("You are curating..."); refine if the machine segment matters more.
-5. Phase 3 candidates (blueprint section 15): trends over time, serve API,
+4. Phase 3 candidates (blueprint section 15): trends over time, serve API,
    OpenWebUI store, weekly coaching report via Hermes cron.
 
 ## Phase 2 task status
@@ -93,5 +103,5 @@ None.
 
 ## Pending decisions
 
-- Desktop Ollama num_ctx unverified (server off all session): batch sizes are
-  conservative; check before tuning pattern batch defaults.
+None. (Ollama num_ctx question resolved 2026-07-21: see live-LLM smoke
+results above and DECISIONS.md.)
