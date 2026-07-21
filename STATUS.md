@@ -1,6 +1,7 @@
 # Project Status - prompt-coach
 Last updated: 2026-07-21 by Claude (Sonnet 5): live-LLM smoke passed,
-default model switched to qwen3-coder-30b:latest, dash --no-sync added
+default model switched to qwen3-coder-30b:latest, dash --no-sync added,
+new Codex CLI store (T41) built and verified live
 
 ## Live-LLM smoke results (2026-07-21)
 
@@ -24,14 +25,33 @@ renders straight from whatever is already in the cache. Avoids the ~17s
 new activity) still needs a plain `dash` or `cache sync` to pick up new
 prompts. Two CLI tests added (117 total, up from 115).
 
+## T41: Codex CLI store (2026-07-21, added post-gate)
+
+Alistair flagged the actual gap is CLI agent harnesses, not the ChatGPT
+web export ("more codex than chatgpt... this is more about cli agent
+harnesses etc for now"). Found a real `~/.codex/sessions/` directory
+(`/mnt/c` on this WSL box) with one genuine session (VS Code extension,
+Oct 2025). Built `stores/codex_cli.py` against the live-verified format
+(BLUEPRINT.md 16.4a): `session_meta`/`event_msg` rollout JSONL,
+`user_message` events with `kind=plain`, IDE-context wrapper stripped down
+to the actual request, `environment_context` kind dropped as boilerplate.
+Wired into `default_stores`, config (`PROMPT_COACH_CODEX_DIR`), discover.
+8 new store tests; live smoke against the real session extracted 4 clean
+human prompts with no wrapper noise. 125 tests total (up from 117).
+See DECISIONS.md for the ChatGPT-vs-Codex priority call.
+
 ## Next session pick-up list
 
-1. ChatGPT importer verification: run `prompt-coach import <export.zip>`
-   against a real export, then clear the UNVERIFIED markers here and in
-   BLUEPRINT.md section 16.2.
+1. Optional: ChatGPT importer verification if a real export ever shows up
+   (`prompt-coach import <export.zip>`, clear UNVERIFIED markers here and
+   in BLUEPRINT.md 16.2) - no longer the priority gap, see DECISIONS.md.
 2. Optional: machine-prompt classifier misses cron-generated curator prompts
    ("You are curating..."); refine if the machine segment matters more.
-3. Phase 3 candidates (blueprint section 15): trends over time, serve API,
+3. Optional: Codex store only has one live session to validate against;
+   revisit extraction rules (the `## My request for Codex:` wrapper strip,
+   the `plain`/`environment_context` kind split) once more real usage
+   accumulates, especially non-VS-Code (raw terminal) sessions.
+4. Phase 3 candidates (blueprint section 15): trends over time, serve API,
    OpenWebUI store, weekly coaching report via Hermes cron.
 
 ## Phase 2 task status

@@ -190,3 +190,25 @@ the derived tag is already the roster standard on this host.
 **Affects**: config.py DEFAULT_MODEL, README, AGENTS.md, BLUEPRINT sections
 4e/9/15.
 **Decided by**: Claude (Fable 5) during live smoke, 2026-07-21.
+
+## 2026-07-21 - New store: Codex CLI; ChatGPT verification deprioritized
+
+**Trigger**: after the live-LLM smoke, Alistair flagged that the actual
+gap is CLI agent harnesses ("more codex than chatgpt... this is more about
+cli agent harnesses etc for now"). Checked the filesystem: a real
+`/mnt/c/Users/Alistair/.codex/sessions/` directory exists with one genuine
+session (VS Code extension, Oct 2025), confirming Codex CLI is an actual
+source worth reading, unlike the ChatGPT web export which has no local
+store at all and needs a manually-provided ZIP that doesn't exist yet.
+**Decision**: build stores/codex_cli.py against the live-verified rollout
+JSONL format (BLUEPRINT.md 16.4a) as a first-class store alongside Hermes,
+Claude Code, and Copilot. The ChatGPT importer stays as built (manual
+import command, UNVERIFIED format) but drops off the active pick-up list
+until a real export shows up - it is no longer the priority gap.
+**Why**: prompt-coach's value is reading session stores that already exist
+on the machine; Codex CLI is one, the ChatGPT web export is not (it is an
+opt-in manual import for a source the user doesn't actually use this way).
+**Affects**: models.py (SourceKind.CODEX), config.py (codex_dir), cli.py
+(default_stores), new store + tests, docs (README, AGENTS, BLUEPRINT
+16.4a, STATUS).
+**Decided by**: Alistair (redirected scope), 2026-07-21.

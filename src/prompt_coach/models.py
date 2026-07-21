@@ -12,6 +12,7 @@ class SourceKind(StrEnum):
     HERMES = "hermes"
     CLAUDE_CODE = "claude-code"
     COPILOT = "copilot"
+    CODEX = "codex"
     CHATGPT = "chatgpt"
     JSON_IMPORT = "json-import"
 

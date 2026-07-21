@@ -4,11 +4,11 @@
 
 A CLI tool that reads your own prompt history from the session stores already
 on your machine (Hermes `state.db`, Claude Code transcripts, Copilot Chat
-sessions, ChatGPT data exports), analyses your prompting style, and produces a
-coaching report: style metrics, scores against the prompting-standards rubric,
-and LLM-detected patterns. Prompt content never leaves your machine; analysis
-runs on a local Ollama model, and the tool still works (deterministic analysis
-only) when no model is reachable.
+sessions, Codex CLI sessions, ChatGPT data exports), analyses your prompting
+style, and produces a coaching report: style metrics, scores against the
+prompting-standards rubric, and LLM-detected patterns. Prompt content never
+leaves your machine; analysis runs on a local Ollama model, and the tool
+still works (deterministic analysis only) when no model is reachable.
 
 ## Quick start
 
@@ -26,7 +26,7 @@ uv run prompt-coach import chatgpt-export.zip   # ChatGPT official data export
 
 | Command | Description |
 |---------|-------------|
-| `discover` | Find available session stores (Hermes, Claude Code, Copilot) |
+| `discover` | Find available session stores (Hermes, Claude Code, Copilot, Codex CLI) |
 | `report` | Coaching report: metrics, rubric scorecard, insights (`--since`, `--sample`, `--no-llm`, `--out`) |
 | `dash` | Terminal dashboard: volume sparklines, segments, scorecard (`--plain` for non-TTY, `--no-sync` to skip the store sync and render from cache as-is) |
 | `stats` | Quick metrics table, no LLM needed |
@@ -59,7 +59,8 @@ No cloud API keys, no telemetry, no egress.
 
 - `PROMPT_COACH_API_BASE` - local LLM endpoint (default `http://192.168.1.123:11434/v1`)
 - `PROMPT_COACH_MODEL` - analysis model (default `qwen3-coder-30b:latest`, 32k num_ctx baked in)
-- `PROMPT_COACH_HERMES_DB`, `PROMPT_COACH_CLAUDE_PROJECTS`, `PROMPT_COACH_CACHE_DIR`
+- `PROMPT_COACH_HERMES_DB`, `PROMPT_COACH_CLAUDE_PROJECTS`, `PROMPT_COACH_COPILOT_DIR`,
+  `PROMPT_COACH_CODEX_DIR`, `PROMPT_COACH_CACHE_DIR`
 
 ## Docs
 

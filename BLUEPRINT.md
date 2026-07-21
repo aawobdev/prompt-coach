@@ -1004,6 +1004,33 @@ with colour thresholds. No LLM calls; no prompt content ever rendered
 (counts, rates, scores only); non-TTY output auto-degrades and --plain
 forces it.
 
+#### 16.4a Store: Codex CLI (added 2026-07-21, verified against live files)
+
+Path: `~/.codex/sessions/YYYY/MM/DD/rollout-<timestamp>-<uuid>.jsonl`. On
+WSL the Windows profile is read via `/mnt/c/Users/<user>/.codex/sessions`;
+a native Linux path is probed as a fallback. Config override
+`PROMPT_COACH_CODEX_DIR`. One session file per conversation (filename stem
+is the session uuid), append-only, so byte-offset resume applies (same
+`iter_files`/`iter_file` contract as Copilot and Claude Code).
+
+Each line is `{"timestamp", "type", "payload"}`. `type=session_meta` (the
+first line) carries `payload.id` and `payload.cwd`. Prompts come from
+`type=event_msg` lines where `payload.type == "user_message"` and
+`payload.kind == "plain"`; `kind == "environment_context"` is sandbox/IDE
+boilerplate injected every turn and is dropped, never a real prompt. The
+VS Code extension (`originator: codex_vscode`) additionally wraps real
+requests in an IDE-context block (active file, open tabs, files
+mentioned); when the `## My request for Codex:` marker is present, only
+the text after it is kept. No per-message id exists in the format, so
+`message_ref` falls back to a content hash (same pattern as Copilot).
+`cwd`/`git_repo` come from the session's `session_meta` line; on a resumed
+(incremental) read that starts past `session_meta`, `cwd` is `None`.
+
+Verified live 2026-07-21 against the one real session file on this
+machine (VS Code extension, Oct 2025, wedding-site project): extraction
+produced clean human-request text with the IDE wrapper correctly
+stripped.
+
 #### 16.4 Phase-2 build tasks
 
 All tasks: Role Developer/Tester, Model Claude Code, temp 0, same
@@ -1054,3 +1081,16 @@ escalation and self-check rules as section 6.
 
 Dependency order: T35 and T36 parallel after docs; T37 parallel with both;
 T38 after T35+T37; T39 anytime; T40 last.
+
+**T41: stores/codex_cli.py + tests (added 2026-07-21, post-gate)**
+- Trigger: live-LLM smoke pick-up session surfaced a real `~/.codex/`
+  directory on this machine (Codex CLI via the VS Code extension); the
+  user redirected priority toward CLI agent harnesses over the
+  unverified ChatGPT web-export path (see DECISIONS.md).
+- Output contract: src/prompt_coach/stores/codex_cli.py, then
+  tests/test_stores_codex.py (one commit; small enough not to split).
+- Description: reader per 16.4a; SourceKind.CODEX added to models.py;
+  PROMPT_COACH_CODEX_DIR config; wired into default_stores/discover.
+- Verify: `uv run pytest tests/test_stores_codex.py -q`; live `discover`
+  and `cache sync` against the real session file, confirming clean
+  extracted content (no IDE-wrapper noise).

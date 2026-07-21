@@ -29,6 +29,15 @@ conventions (uv, ruff, black, pytest, src-layout, STATUS/DECISIONS docs).
 - **Claude Code**: `~/.claude/projects/<slug>/*.jsonl`. Keep lines where
   `type=user`, `origin.kind=human`, `promptSource=typed`, not `isSidechain`,
   and content is a real prompt (drop command echoes and system reminders).
+- **Copilot Chat**: `/mnt/c/.../workspaceStorage/<ws>/chatSessions/*.jsonl`
+  (JSON-patch event log; verified live 2026-07-20).
+- **Codex CLI**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (`/mnt/c` on
+  WSL, native path as fallback; verified live 2026-07-21). Keep
+  `type=event_msg` lines with `payload.type=user_message` and
+  `payload.kind=plain`; `kind=environment_context` is injected boilerplate,
+  never something typed. The VS Code extension wraps real requests in an
+  IDE-context block; strip down to the text after the
+  `## My request for Codex:` marker when present.
 - **JSON import**: list of sessions with `messages:[{role, content}]`.
 - Hermes "user" rows include machine-generated `hermes -z` task specs
   (`TASK:` prefixes): classify origin human/machine and segment all analysis.

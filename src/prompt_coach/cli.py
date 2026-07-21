@@ -19,6 +19,7 @@ from prompt_coach.models import ReportData
 from prompt_coach.report.generator import build_report
 from prompt_coach.stores.chatgpt_export import ChatGPTExportStore, looks_like_chatgpt_export
 from prompt_coach.stores.claude_code import ClaudeCodeStore
+from prompt_coach.stores.codex_cli import CodexStore
 from prompt_coach.stores.copilot import CopilotStore
 from prompt_coach.stores.hermes import HermesStore
 from prompt_coach.stores.json_import import JsonImportStore
@@ -55,6 +56,7 @@ def default_stores(cfg: Config) -> list:
         HermesStore(cfg.stores.hermes_db),
         ClaudeCodeStore(cfg.stores.claude_projects_dir),
         CopilotStore(cfg.stores.copilot_dir),
+        CodexStore(cfg.stores.codex_dir),
     ]
 
 
