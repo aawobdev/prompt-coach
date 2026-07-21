@@ -28,7 +28,7 @@ uv run prompt-coach import chatgpt-export.zip   # ChatGPT official data export
 |---------|-------------|
 | `discover` | Find available session stores (Hermes, Claude Code, Copilot) |
 | `report` | Coaching report: metrics, rubric scorecard, insights (`--since`, `--sample`, `--no-llm`, `--out`) |
-| `dash` | Terminal dashboard: volume sparklines, segments, scorecard (`--plain` for non-TTY) |
+| `dash` | Terminal dashboard: volume sparklines, segments, scorecard (`--plain` for non-TTY, `--no-sync` to skip the store sync and render from cache as-is) |
 | `stats` | Quick metrics table, no LLM needed |
 | `query` | Natural-language question over your prompt history, with citations |
 | `import` | Import a ChatGPT export (ZIP/JSON) or simple JSON sessions; format auto-detected |

@@ -186,6 +186,9 @@ def report(
 def dash(
     since: str | None = typer.Option("12w", "--since", help="Time range (default 12w)"),
     plain: bool = typer.Option(False, "--plain", help="Force plain text output"),
+    no_sync: bool = typer.Option(
+        False, "--no-sync", help="Skip store sync, render from cache as-is"
+    ),
 ):
     """Terminal dashboard: volume trends, segments, rubric scores. No LLM, no content."""
     from rich.console import Console
@@ -194,7 +197,8 @@ def dash(
 
     cfg = load_config()
     cache = open_cache(cfg)
-    cache.sync(default_stores(cfg))
+    if not no_sync:
+        cache.sync(default_stores(cfg))
     since_dt = parse_since(since)
     prompts = cache.prompts(since=since_dt)
     if not prompts:

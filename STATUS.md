@@ -1,6 +1,6 @@
 # Project Status - prompt-coach
-Last updated: 2026-07-21 by Claude (Fable 5): live-LLM smoke passed,
-default model switched to qwen3-coder-30b:latest (see DECISIONS.md)
+Last updated: 2026-07-21 by Claude (Sonnet 5): live-LLM smoke passed,
+default model switched to qwen3-coder-30b:latest, dash --no-sync added
 
 ## Live-LLM smoke results (2026-07-21)
 
@@ -16,16 +16,22 @@ default model switched to qwen3-coder-30b:latest (see DECISIONS.md)
 - Note: `--sample` sizes only the rubric sample; patterns take their own
   stratified sample (110 prompts here). By design.
 
+## dash --no-sync (2026-07-21)
+
+Added `--no-sync` to `prompt-coach dash`: skips `cache.sync(...)` and
+renders straight from whatever is already in the cache. Avoids the ~17s
+/mnt/c stat overhead on repeat runs during a session; first run (or after
+new activity) still needs a plain `dash` or `cache sync` to pick up new
+prompts. Two CLI tests added (117 total, up from 115).
+
 ## Next session pick-up list
 
 1. ChatGPT importer verification: run `prompt-coach import <export.zip>`
    against a real export, then clear the UNVERIFIED markers here and in
    BLUEPRINT.md section 16.2.
-2. Optional UX: sync throttle or --no-sync flag (dash pays ~17s of /mnt/c
-   stat overhead per run).
-3. Optional: machine-prompt classifier misses cron-generated curator prompts
+2. Optional: machine-prompt classifier misses cron-generated curator prompts
    ("You are curating..."); refine if the machine segment matters more.
-4. Phase 3 candidates (blueprint section 15): trends over time, serve API,
+3. Phase 3 candidates (blueprint section 15): trends over time, serve API,
    OpenWebUI store, weekly coaching report via Hermes cron.
 
 ## Phase 2 task status

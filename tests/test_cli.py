@@ -152,3 +152,21 @@ def test_cache_clear(env):
 
 def test_serve_is_phase_2(env):
     assert runner.invoke(app, ["serve"]).exit_code == 1
+
+
+def test_dash_smoke(env):
+    result = runner.invoke(app, ["dash", "--plain"])
+    assert result.exit_code == 0
+    assert "nginx" not in result.output  # no prompt content on screen
+
+
+def test_dash_no_sync_skips_sync(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr("prompt_coach.cache.CacheDB.sync", lambda self, *a, **k: calls.append(1))
+
+    result = runner.invoke(app, ["dash", "--plain", "--no-sync"])
+    assert result.exit_code == 1  # nothing in cache yet, never synced
+    assert calls == []
+
+    runner.invoke(app, ["dash", "--plain"])
+    assert calls == [1]
