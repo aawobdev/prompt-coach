@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -72,20 +72,33 @@ class CacheDB:
 
     # -- sync ---------------------------------------------------------------
 
-    def sync(self, stores: Sequence[SessionStore], force: bool = False) -> SyncStats:
+    def sync(
+        self,
+        stores: Sequence[SessionStore],
+        force: bool = False,
+        on_store: Callable[[str, bool], None] | None = None,
+    ) -> SyncStats:
+        """`on_store(kind, done)` fires (False) right before a store starts and
+        (True) right after -- lets a caller show per-store progress. One store
+        (e.g. Copilot's /mnt/c reads) can dominate wall clock; without this, the
+        CLI looks hung between the initial invocation and the final render."""
         stats = SyncStats()
         for store in stores:
+            if on_store:
+                on_store(store.kind.value, False)
             info = store.discover()
             if not info.available:
                 stats.stores_failed[store.kind.value] = info.detail or "unavailable"
-                continue
-            try:
-                if hasattr(store, "iter_files"):
-                    self._sync_by_files(store, stats, force)
-                else:
-                    self._sync_by_watermark(store, stats, force)
-            except Exception as exc:  # noqa: BLE001 - one bad store must not kill sync
-                stats.stores_failed[store.kind.value] = type(exc).__name__
+            else:
+                try:
+                    if hasattr(store, "iter_files"):
+                        self._sync_by_files(store, stats, force)
+                    else:
+                        self._sync_by_watermark(store, stats, force)
+                except Exception as exc:  # noqa: BLE001 - one bad store must not kill sync
+                    stats.stores_failed[store.kind.value] = type(exc).__name__
+            if on_store:
+                on_store(store.kind.value, True)
         self.conn.commit()
         return stats
 

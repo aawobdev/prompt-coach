@@ -7,7 +7,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from prompt_coach.models import ReportData
+from prompt_coach.models import ReportData, score_label
 
 _TEMPLATES = Path(__file__).parent / "templates"
 
@@ -19,4 +19,5 @@ def build_report(data: ReportData) -> str:
         trim_blocks=False,
         lstrip_blocks=False,
     )
+    env.globals["score_label"] = score_label  # D2: shared bands, bold text label in markdown
     return env.get_template("report.md.j2").render(data=data)

@@ -31,10 +31,12 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "S"]
 ignore = ["S105", "S106"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106", "E501"]
+"tests/**" = ["S101", "S105", "S106", "E501", "S603", "S607"]
 # LLM prompt templates are natural-language blocks; wrapping them mid-sentence
 # would change the prompts themselves.
 "src/prompt_coach/llm/prompts.py" = ["E501"]
+# Fixed git binary, args are local filesystem paths only, not untrusted input.
+"src/prompt_coach/analysis/docs.py" = ["S603", "S607"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["typer.Argument", "typer.Option"]

@@ -28,9 +28,10 @@ uv run prompt-coach import chatgpt-export.zip   # ChatGPT official data export
 |---------|-------------|
 | `discover` | Find available session stores (Hermes, Claude Code, Copilot, Codex CLI) |
 | `report` | Coaching report: metrics, rubric scorecard, insights (`--since`, `--sample`, `--no-llm`, `--out`) |
-| `dash` | Terminal dashboard: volume sparklines, segments, scorecard (`--plain` for non-TTY, `--no-sync` to skip the store sync and render from cache as-is) |
+| `dash` | Terminal dashboard: volume sparklines, segments, scorecard, project-doc quality (`--plain` for non-TTY, `--no-sync` to skip the store sync and render from cache as-is) |
 | `stats` | Quick metrics table, no LLM needed |
 | `query` | Natural-language question over your prompt history, with citations |
+| `nudge` | Claude Code hook (`UserPromptSubmit` + `Stop`). Default `coach` mode: blocks weak prompts with an LLM-rewritten suggestion (degrades to a one-line tip if the LLM is unreachable), once per session. `always` mode blocks and rewrites every prompt; `off` disables it. Set via `PROMPT_COACH_NUDGE_MODE` or `[nudge] mode` in config.toml. Not meant to be run by hand. |
 | `import` | Import a ChatGPT export (ZIP/JSON) or simple JSON sessions; format auto-detected |
 | `cache sync/info/clear` | Manage the local analysis cache |
 

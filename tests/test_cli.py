@@ -109,9 +109,10 @@ def test_report_out_file(env):
     assert "# Prompt Coach Report" in out.read_text()
 
 
-def test_report_empty_range_exits_1(env):
+def test_report_empty_range_is_not_an_error(env):
     result = runner.invoke(app, ["report", "--since", "2030-01-01"])
-    assert result.exit_code == 1
+    assert result.exit_code == 0
+    assert "quiet week" in result.output
 
 
 def test_query_degraded_shows_snippets(env):
@@ -119,6 +120,90 @@ def test_query_degraded_shows_snippets(env):
     assert result.exit_code == 0
     assert "LLM unavailable" in result.output
     assert "nginx" in result.output
+
+
+def test_nudge_hook_long_weak_prompt(env):
+    payload = json.dumps(
+        {
+            "prompt": "please help me redesign the whole reporting pipeline. " * 5,
+            "session_id": "hook-s1",
+        }
+    )
+    result = runner.invoke(app, ["nudge"], input=payload)
+    assert result.exit_code == 0
+    body = json.loads(result.output)
+    assert "systemMessage" in body
+
+
+def test_nudge_hook_short_prompt_is_silent(env):
+    payload = json.dumps({"prompt": "run it", "session_id": "hook-s1"})
+    result = runner.invoke(app, ["nudge"], input=payload)
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {}
+
+
+def test_nudge_hook_malformed_stdin_never_crashes(env):
+    result = runner.invoke(app, ["nudge"], input="not json")
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {}
+
+
+def test_nudge_hook_stop_event_reads_transcript(env):
+    transcript = env / "sess.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": "please help me redesign the whole reporting pipeline. " * 5,
+                },
+                "promptSource": "typed",
+                "origin": {"kind": "human"},
+                "isSidechain": False,
+                "uuid": "u-1",
+                "timestamp": "2026-07-27T10:00:00.000Z",
+                "sessionId": "hook-s2",
+                "cwd": "/p",
+            }
+        )
+        + "\n"
+    )
+    payload = json.dumps(
+        {
+            "hook_event_name": "Stop",
+            "session_id": "hook-s2",
+            "transcript_path": str(transcript),
+        }
+    )
+    result = runner.invoke(app, ["nudge"], input=payload)
+    assert result.exit_code == 0
+    assert "systemMessage" in json.loads(result.output)
+
+
+def test_nudge_hook_off_mode_is_silent(env, monkeypatch):
+    monkeypatch.setenv("PROMPT_COACH_NUDGE_MODE", "off")
+    payload = json.dumps(
+        {
+            "prompt": "please help me redesign the whole reporting pipeline. " * 5,
+            "session_id": "hook-s3",
+        }
+    )
+    result = runner.invoke(app, ["nudge"], input=payload)
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {}
+
+
+def test_nudge_hook_always_mode_blocks_with_llm_rewrite(env, monkeypatch):
+    monkeypatch.setenv("PROMPT_COACH_NUDGE_MODE", "always")
+    monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+    monkeypatch.setattr("prompt_coach.nudge.rewrite_prompt", lambda prompt, llm: "REWRITTEN")
+    payload = json.dumps({"prompt": "add a retry to the fetcher", "session_id": "hook-s4"})
+    result = runner.invoke(app, ["nudge"], input=payload)
+    assert result.exit_code == 0
+    body = json.loads(result.output)
+    assert body["decision"] == "block"
+    assert "REWRITTEN" in body["reason"]
 
 
 def test_import_roundtrip(env, sample_sessions_path):
@@ -161,12 +246,31 @@ def test_dash_smoke(env):
     assert "nginx" not in result.output  # no prompt content on screen
 
 
+def test_dash_quiet_week_is_not_an_error(env):
+    result = runner.invoke(app, ["dash", "--plain", "--since", "2030-01-01"])
+    assert result.exit_code == 0
+    assert "quiet week" in result.output
+
+
+def test_stats_quiet_week_is_not_an_error(env):
+    result = runner.invoke(app, ["stats", "--since", "2030-01-01"])
+    assert result.exit_code == 0
+    assert "quiet week" in result.output
+
+
+def test_stats_shows_no_llm_tag(env):
+    result = runner.invoke(app, ["stats"])
+    assert result.exit_code == 0
+    assert "no LLM" in result.output
+
+
 def test_dash_no_sync_skips_sync(env, monkeypatch):
     calls = []
     monkeypatch.setattr("prompt_coach.cache.CacheDB.sync", lambda self, *a, **k: calls.append(1))
 
     result = runner.invoke(app, ["dash", "--plain", "--no-sync"])
-    assert result.exit_code == 1  # nothing in cache yet, never synced
+    assert result.exit_code == 0  # nothing in cache yet, never synced -- not an error (D7)
+    assert "no cache yet" in result.output
     assert calls == []
 
     runner.invoke(app, ["dash", "--plain"])

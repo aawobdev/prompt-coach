@@ -44,10 +44,13 @@ Scored against prompting-standards A1-A13
 ({{ data.rubric.rubric_version }}{% if data.rubric.sampled_llm %}, LLM judge on {{ data.rubric.sampled_llm }} sampled prompts{% endif %}).
 The machine column scores the orchestration pipeline's task specs, not you.
 
+{%- macro score_cell(value, coverage) -%}
+{%- if value is none -%}n/a{%- else -%}**{{ score_label(value, coverage) }}**{%- endif -%}
+{%- endmacro -%}
 | Rule | | Human | Machine | Coverage |
 |------|--|-------|---------|----------|
 {%- for r in data.rubric.rules %}
-| {{ r.rule }} | {{ r.title }} | {% if r.human_mean is not none %}{{ '%.2f'|format(r.human_mean) }}{% else %}n/a{% endif %} | {% if r.machine_mean is not none %}{{ '%.2f'|format(r.machine_mean) }}{% else %}n/a{% endif %} | {% if r.applicable %}{{ r.coverage }}{% else %}not scored{% endif %} |
+| {{ r.rule }} | {{ r.title }} | {{ score_cell(r.human_mean, r.coverage) }} | {{ score_cell(r.machine_mean, r.coverage) }} | {% if r.applicable %}{{ r.coverage }}{% else %}not scored{% endif %} |
 {%- endfor %}
 {% endif %}
 {% if data.patterns %}

@@ -94,6 +94,18 @@ def test_unavailable_store_recorded_not_fatal(cache):
     assert s.added == 1
 
 
+def test_on_store_callback_fires_start_and_done_per_store(cache):
+    events = []
+    stores = [BrokenStore(), FakeStore([make_prompt("a", "hello world")])]
+    cache.sync(stores, on_store=lambda kind, done: events.append((kind, done)))
+    assert events == [
+        ("hermes", False),
+        ("hermes", True),
+        ("json-import", False),
+        ("json-import", True),
+    ]
+
+
 def test_filters(cache):
     prompts = [
         make_prompt("a", "human one"),

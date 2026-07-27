@@ -51,6 +51,25 @@ def parse_since(value: str | None) -> datetime | None:
         raise typer.BadParameter(f"{value!r} is not 7d/4w/3m or an ISO date") from exc
 
 
+def _since_label(raw: str | None, since_dt: datetime | None) -> str:
+    if since_dt is None:
+        return "all time"
+    date = since_dt.date().isoformat()
+    return f"since {date} ({raw})" if raw and raw != date else f"since {date}"
+
+
+_FIRST_RUN_BODY = "nothing synced -- run `prompt-coach cache sync` to pull your first window."
+
+
+def _empty_state(cache: CacheDB, since_dt: datetime | None, label: str) -> tuple[str, str]:
+    """(header, body) for a no-prompts result. Distinguishes an empty cache (D7:
+    two-line pointer to `cache sync`) from a quiet window (D7: calm one-liner) --
+    both now exit 0, not 1: neither is an error."""
+    if cache.counts()["prompts"] == 0:
+        return "no cache yet", _FIRST_RUN_BODY
+    return f"0 prompts · {label}", f"quiet week -- no prompts {label}. Try a wider --since."
+
+
 def default_stores(cfg: Config) -> list:
     return [
         HermesStore(cfg.stores.hermes_db),
@@ -62,6 +81,38 @@ def default_stores(cfg: Config) -> list:
 
 def open_cache(cfg: Config) -> CacheDB:
     return CacheDB(cfg.cache_dir / "cache.db")
+
+
+def sync_with_progress(cache: CacheDB, cfg: Config, *, force: bool = False):
+    """Sync with a per-store progress bar on stderr, so a slow store (Copilot's
+    /mnt/c reads routinely take most of the wall clock) doesn't look like a
+    hang between the command starting and the final render appearing. Falls
+    back to a silent sync when stderr isn't a terminal (piped/redirected
+    output, or under test) -- there's no one to show a bar to."""
+    from rich.console import Console
+    from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+
+    stores = default_stores(cfg)
+    progress_console = Console(stderr=True)
+    if not progress_console.is_terminal:
+        return cache.sync(stores, force=force)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[dim]syncing {task.fields[store]}[/]"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=progress_console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("sync", total=len(stores), store="")
+
+        def on_store(kind: str, done: bool) -> None:
+            if done:
+                progress.advance(task)
+            else:
+                progress.update(task, store=kind)
+
+        return cache.sync(stores, force=force, on_store=on_store)
 
 
 def make_llm(cfg: Config) -> LocalLLM | None:
@@ -101,18 +152,38 @@ def discover():
 @app.command()
 def stats(
     since: str | None = typer.Option(None, "--since", help="Time range (e.g. 7d, 30d)"),
+    plain: bool = typer.Option(False, "--plain", help="Force plain text output"),
 ):
     """Quick overview of prompting metrics (deterministic, no LLM)."""
+    from rich.console import Console
+    from rich.table import Table
+    from rich.text import Text
+
     cfg = load_config()
     cache = open_cache(cfg)
-    cache.sync(default_stores(cfg))
+    sync_stats = sync_with_progress(cache, cfg)
     since_dt = parse_since(since)
     prompts = cache.prompts(since=since_dt)
+    console = Console(force_terminal=False, no_color=True) if plain else Console()
+    label = _since_label(since, since_dt)
     if not prompts:
-        typer.echo("No prompts in range. Run `prompt-coach cache sync` or widen --since.")
-        raise typer.Exit(1)
+        header, body = _empty_state(cache, since_dt, label)
+        console.print(Text.assemble(("prompt-coach", "bold cyan"), (f" · {header}", "dim")))
+        console.print(Text(body, style="dim"))
+        return
+    for store, reason in sync_stats.stores_failed.items():
+        console.print(Text(f"⚠ {store}: sync failed ({reason})", style="yellow"))
     m = compute_metrics(prompts)
-    typer.echo(f"{'Metric':32} {'Human':>10} {'Machine':>10}")
+    # Rates are behavior, not quality -- no score-band colors here (D1).
+    console.print(
+        Text.assemble(
+            ("prompt-coach stats", "bold cyan"), (f" · {label} · ", "dim"), ("no LLM", "dim")
+        )
+    )
+    table = Table(box=None)
+    table.add_column("Metric", style="bold")
+    table.add_column("Human", justify="right")
+    table.add_column("Machine", justify="right")
     rows = [
         ("Prompts", "prompt_count", "{:d}"),
         ("Sessions", "session_count", "{:d}"),
@@ -124,10 +195,11 @@ def stats(
         ("Constraint rate", "constraint_rate", "{:.0%}"),
         ("Structured-output rate", "structured_output_rate", "{:.0%}"),
     ]
-    for label, attr, fmt in rows:
+    for row_label, attr, fmt in rows:
         h = fmt.format(getattr(m.human, attr)) if m.human else "-"
         mc = fmt.format(getattr(m.machine, attr)) if m.machine else "-"
-        typer.echo(f"{label:32} {h:>10} {mc:>10}")
+        table.add_row(row_label, h, mc)
+    console.print(table)
 
 
 @app.command()
@@ -142,12 +214,16 @@ def report(
     """Generate a coaching report from your prompt history."""
     cfg = load_config()
     cache = open_cache(cfg)
-    stats_ = cache.sync(default_stores(cfg), force=refresh)
+    stats_ = sync_with_progress(cache, cfg, force=refresh)
     since_dt = parse_since(since)
     prompts = cache.prompts(since=since_dt, limit=limit)
     if not prompts:
-        typer.echo("No prompts in range. Widen --since or check `prompt-coach discover`.")
-        raise typer.Exit(1)
+        # A quiet window or an unsynced cache are routine, not failures (D7).
+        _, body = _empty_state(cache, since_dt, _since_label(since, since_dt))
+        typer.echo(f"# Prompt Coach Report - {datetime.now(tz=UTC).date().isoformat()}")
+        typer.echo()
+        typer.echo(body)
+        return
 
     llm = None if no_llm else make_llm(cfg)
     rubric = run_rubric(prompts, llm, cache, sample_size=sample)
@@ -194,27 +270,43 @@ def dash(
 ):
     """Terminal dashboard: volume trends, segments, rubric scores. No LLM, no content."""
     from rich.console import Console
+    from rich.text import Text
 
+    from prompt_coach.analysis.docs import analyse_docs
     from prompt_coach.report.dash import build_dash, weekly_volumes
 
     cfg = load_config()
     cache = open_cache(cfg)
+    stores_failed: dict[str, str] = {}
     if not no_sync:
-        cache.sync(default_stores(cfg))
+        stores_failed = sync_with_progress(cache, cfg).stores_failed
     since_dt = parse_since(since)
     prompts = cache.prompts(since=since_dt)
+    console = Console(force_terminal=False, no_color=True) if plain else Console()
+    label = _since_label(since, since_dt)
     if not prompts:
-        typer.echo("No prompts in range. Widen --since or check `prompt-coach discover`.")
-        raise typer.Exit(1)
+        header, body = _empty_state(cache, since_dt, label)
+        console.print(Text.assemble(("prompt-coach", "bold cyan"), (f" · {header}", "dim")))
+        console.print(Text(body, style="dim"))
+        return
+    for store, reason in stores_failed.items():
+        console.print(Text(f"⚠ {store}: sync failed ({reason})", style="yellow"))
+    store_counts = {
+        k: v for k, v in cache.counts(since=since_dt).items() if k not in ("prompts", "sessions")
+    }
     renderable = build_dash(
         metrics=compute_metrics(prompts),
         rubric=run_rubric(prompts, None, cache),
         volumes=weekly_volumes(prompts),
         prompt_count=len(prompts),
         session_count=len({f"{p.source}:{p.session_id}" for p in prompts}),
-        since_label=f"since {since_dt.date().isoformat()}" if since_dt else "all time",
+        since_label=label,
+        store_count=len(store_counts),
+        stale_count=len(stores_failed),
+        docs=analyse_docs(prompts),
+        width=console.size.width,
+        plain=plain,
     )
-    console = Console(force_terminal=False, no_color=True) if plain else Console()
     console.print(renderable)
 
 
@@ -227,7 +319,7 @@ def query(
 
     cfg = load_config()
     cache = open_cache(cfg)
-    cache.sync(default_stores(cfg))
+    sync_with_progress(cache, cfg)
     typer.echo(answer(question, cache, make_llm(cfg)))
 
 
@@ -271,7 +363,7 @@ def cache_sync(
 ):
     """Sync all stores into the local cache."""
     cfg = load_config()
-    s = open_cache(cfg).sync(default_stores(cfg), force=refresh)
+    s = sync_with_progress(open_cache(cfg), cfg, force=refresh)
     typer.echo(f"Scanned {s.scanned}, added {s.added}, deduped {s.deduped}")
     for store, reason in s.stores_failed.items():
         typer.echo(f"Skipped {store}: {reason}")
@@ -299,6 +391,27 @@ def cache_clear(
     cfg = load_config()
     open_cache(cfg).clear()
     typer.echo("Cache cleared.")
+
+
+@app.command()
+def nudge():
+    """Claude Code hook for both UserPromptSubmit and Stop: prints a
+    hook-response JSON to stdout. Mode ("coach"/"always"/"off") comes from
+    config -- see nudge.py's module docstring. No store sync. In "coach"/
+    "always" mode this may call the local LLM (bounded by its own short
+    timeout, not the 120s default) and block the prompt; must never raise --
+    a hook failure would block every prompt or response."""
+    import json as _json
+
+    from prompt_coach.nudge import build_response
+
+    try:
+        payload = _json.load(sys.stdin)
+        cfg = load_config()
+        response = build_response(payload, cfg)
+    except Exception:
+        response = {}
+    typer.echo(_json.dumps(response))
 
 
 @app.command()

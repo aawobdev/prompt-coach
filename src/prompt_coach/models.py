@@ -7,6 +7,31 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
+LOW_N_THRESHOLD = 3  # coverage below this renders dim + "low n", distinct from n/a
+
+
+def score_band(value: float | None) -> tuple[str, str]:
+    """Shared score-band mapping: (label, color) -- "good"/"fair"/"weak"/"n/a" with a
+    rich-compatible color name. One function, used by dash, stats, and report so the
+    semantic bands (>=0.7 / >=0.4 / below) never drift between rich and plain-text
+    surfaces (D2)."""
+    if value is None:
+        return "n/a", "dim"
+    if value >= 0.7:
+        return "good", "green"
+    if value >= 0.4:
+        return "fair", "yellow"
+    return "weak", "red"
+
+
+def score_label(value: float | None, coverage: int | None = None) -> str:
+    """Plain-text score cell: "0.82 good", "n/a", or "0.55 fair (low n)"."""
+    label, _ = score_band(value)
+    text = f"{value:.2f} {label}" if value is not None else label
+    if value is not None and coverage is not None and 0 < coverage < LOW_N_THRESHOLD:
+        text += " (low n)"
+    return text
+
 
 class SourceKind(StrEnum):
     HERMES = "hermes"
@@ -125,6 +150,26 @@ class PatternReport:
     notable_patterns: tuple[str, ...]
     topics: tuple[TopicShare, ...]
     sample_size: int
+
+
+@dataclass(frozen=True)
+class DocFinding:
+    """Size/structure/staleness read of one project doc (CLAUDE.md/AGENTS.md/README.md)."""
+
+    path: str  # ~-shortened for display; never a prompt, safe to render
+    words: int
+    headers: int
+    list_items: int
+    is_redirect: bool  # short stub pointing at another doc in the same dir
+    staleness_days: float | None  # None when not in a git repo or file untracked
+    flags: tuple[str, ...]  # "sparse" | "unstructured" | "stale"
+
+
+@dataclass(frozen=True)
+class DocQualitySummary:
+    findings: tuple[DocFinding, ...]
+    dirs_checked: int
+    dirs_without_docs: int
 
 
 @dataclass(frozen=True)

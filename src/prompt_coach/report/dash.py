@@ -17,9 +17,19 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from prompt_coach.models import Prompt, RubricSummary, SegmentMetrics, StyleMetrics
+from prompt_coach.models import (
+    LOW_N_THRESHOLD,
+    DocQualitySummary,
+    Prompt,
+    RubricSummary,
+    SegmentMetrics,
+    StyleMetrics,
+    score_band,
+)
 
 _BLOCKS = " ▁▂▃▄▅▆▇█"
+_NARROW_WIDTH = 100  # below this, dash stacks panels full-width instead of side-by-side (D3)
+_MAX_VOLUME_ROWS = 3  # below _NARROW_WIDTH, collapse the rest into "+ N more…" (1a)
 
 
 def sparkline(values: Sequence[int]) -> str:
@@ -43,14 +53,22 @@ def weekly_volumes(
             continue
         idx = min(weeks - 1, int((p.timestamp - start).days // 7))
         buckets.setdefault(p.source.value, [0] * weeks)[idx] += 1
-    return dict(sorted(buckets.items()))
+    return buckets
 
 
-def _score_text(value: float | None) -> Text:
-    if value is None:
-        return Text("n/a", style="dim")
-    style = "green" if value >= 0.7 else "yellow" if value >= 0.4 else "red"
-    return Text(f"{value:.2f}", style=style)
+def _ordered_stores(volumes: dict[str, list[int]]) -> list[str]:
+    """claude-code pinned first (primary usage per project scope), remainder by
+    volume descending (D4) -- replaces the previous alphabetical order."""
+    return sorted(volumes, key=lambda name: (name != "claude-code", -sum(volumes[name])))
+
+
+def _score_text(value: float | None, coverage: int | None = None) -> Text:
+    label, color = score_band(value)
+    text = f"{value:.2f} {label}" if value is not None else label
+    low_n = value is not None and coverage is not None and 0 < coverage < LOW_N_THRESHOLD
+    if low_n:
+        return Text(f"{text} ·low n", style="dim")
+    return Text(text, style=color)
 
 
 def _rate(seg: SegmentMetrics | None, attr: str, pct: bool = True) -> str:
@@ -58,6 +76,31 @@ def _rate(seg: SegmentMetrics | None, attr: str, pct: bool = True) -> str:
         return "-"
     value = getattr(seg, attr)
     return f"{value:.0%}" if pct else f"{value:.1f}"
+
+
+def _docs_section(docs: DocQualitySummary) -> RenderableType:
+    """The clean one-liner replaces silent omission; the findings panel appears
+    only when findings exist (D6) -- its presence is itself the alert, so rows stay in
+    normal score-band colors and only the title carries the flagged count in yellow."""
+    flagged = [f for f in docs.findings if f.flags]
+    if not flagged:
+        return Text.assemble(
+            ("docs · clean", "green"),
+            (f" -- 0 flagged findings in window ({len(docs.findings)} checked)", "dim"),
+        )
+    table = Table(
+        title=Text.assemble(
+            (f"docs quality · {len(flagged)} finding{'s' if len(flagged) != 1 else ''}", "yellow")
+        ),
+        title_justify="left",
+        box=None,
+    )
+    table.add_column("Path", style="bold")
+    table.add_column("Words", justify="right")
+    table.add_column("Flags")
+    for f in flagged:
+        table.add_row(f.path, str(f.words), ", ".join(f.flags))
+    return Panel(table)
 
 
 def build_dash(
@@ -68,21 +111,47 @@ def build_dash(
     prompt_count: int,
     session_count: int,
     since_label: str,
+    store_count: int | None = None,
+    stale_count: int = 0,
+    docs: DocQualitySummary | None = None,
+    width: int = 120,
+    plain: bool = False,
 ) -> RenderableType:
-    header = Text.assemble(
+    header_parts: list[tuple[str, str]] = [
         ("prompt-coach", "bold cyan"),
-        ("  |  ", "dim"),
+        (" · ", "dim"),
         (f"{prompt_count} prompts", "bold"),
-        (f" across {session_count} sessions  ", ""),
-        (f"({since_label})", "dim"),
-    )
+        (f" · {session_count} sessions", ""),
+    ]
+    if store_count is not None:
+        header_parts.append((f" · {store_count} store{'s' if store_count != 1 else ''}", "dim"))
+        if stale_count:
+            header_parts.append((f" ({stale_count} stale)", "yellow"))
+    header_parts.append((f" · {since_label}", "dim"))
+    header = Text.assemble(*header_parts)
 
+    ordered_stores = _ordered_stores(volumes)
+    narrow = width < _NARROW_WIDTH
+    shown, rest = (
+        (ordered_stores[:_MAX_VOLUME_ROWS], ordered_stores[_MAX_VOLUME_ROWS:])
+        if narrow
+        else (ordered_stores, [])
+    )
+    # Trend column stays present (not removed) even in plain mode, so the table's
+    # measured width doesn't shrink enough to word-wrap the panel title (D9 aside:
+    # plain still drops the sparkline chars themselves -- they carry no meaning
+    # without color -- just not the column that holds them).
     volume = Table(title="Volume (12 weeks)", title_justify="left", show_header=False, box=None)
     volume.add_column("store", style="bold")
     volume.add_column("trend", no_wrap=True)
     volume.add_column("total", justify="right", style="dim")
-    for store, counts in volumes.items():
-        volume.add_row(store, Text(sparkline(counts), style="cyan"), str(sum(counts)))
+    for store in shown:
+        counts = volumes[store]
+        trend = "" if plain else Text(sparkline(counts), style="cyan")
+        volume.add_row(store, trend, str(sum(counts)))
+    if rest:
+        rest_total = sum(sum(volumes[s]) for s in rest)
+        volume.add_row(f"+ {len(rest)} more…", "", str(rest_total), style="dim")
     if not volumes:
         volume.add_row("no prompts in range", "", "")
 
@@ -118,13 +187,19 @@ def build_dash(
     for r in rubric.rules:
         if not r.applicable:
             continue
+        low_n = 0 < r.coverage < LOW_N_THRESHOLD
         scorecard.add_row(
-            r.rule, r.title, _score_text(r.human_mean), _score_text(r.machine_mean), str(r.coverage)
+            r.rule,
+            r.title,
+            _score_text(r.human_mean, r.coverage),
+            _score_text(r.machine_mean, r.coverage),
+            str(r.coverage),
+            style="dim" if low_n else None,
         )
 
-    return Group(
-        header,
-        Text(),
-        Columns([Panel(volume), Panel(split)], equal=False),
-        Panel(scorecard),
-    )
+    panels = [Panel(volume), Panel(split)]
+    top: RenderableType = Group(*panels) if narrow else Columns(panels, equal=False)
+    parts: list[RenderableType] = [header, Text(), top, Panel(scorecard)]
+    if docs is not None:
+        parts.append(_docs_section(docs))
+    return Group(*parts)

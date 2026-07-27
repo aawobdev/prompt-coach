@@ -95,3 +95,9 @@ def test_skipped_stores_listed():
 def test_rubric_na_visible():
     text = build_report(make_data())
     assert "not scored" in text  # A12 row
+
+
+def test_rubric_scores_show_band_labels():
+    """D2: score bands travel as text labels ("0.82 good"), not bare numbers."""
+    text = build_report(make_data())
+    assert any(band in text for band in ("good", "fair", "weak"))

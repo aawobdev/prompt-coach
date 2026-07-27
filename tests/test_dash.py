@@ -6,7 +6,15 @@ from rich.console import Console
 
 from prompt_coach.analysis.metrics import compute_metrics
 from prompt_coach.analysis.rubric import aggregate, score_prompt_deterministic
-from prompt_coach.models import Prompt, PromptOrigin, SourceKind
+from prompt_coach.models import (
+    DocFinding,
+    DocQualitySummary,
+    Prompt,
+    PromptOrigin,
+    SourceKind,
+    score_band,
+    score_label,
+)
 from prompt_coach.report.dash import build_dash, sparkline, weekly_volumes
 from prompt_coach.stores.base import content_hash
 
@@ -103,3 +111,172 @@ class TestBuildDash:
             )
         )
         assert "no prompts in range" in text
+
+    def test_low_coverage_row_flagged_low_n(self):
+        prompts = [
+            make(
+                "Write a slugify function. Output only the function. Example: e.g. x == y. "
+                "Must use stdlib only because deps are frozen.",
+                ref="1",
+            )
+        ]
+        scores = [s for p in prompts for s in score_prompt_deterministic(p)]
+        text = render(
+            build_dash(
+                metrics=compute_metrics(prompts),
+                rubric=aggregate(scores),
+                volumes=weekly_volumes(prompts, now=NOW),
+                prompt_count=1,
+                session_count=1,
+                since_label="all time",
+            )
+        )
+        assert "low n" in text  # coverage=1 on every scored rule (D5)
+
+    def test_docs_clean_one_liner_when_no_findings(self):
+        prompts = [make("hello there friend", ref="1")]
+        docs = DocQualitySummary(
+            findings=(
+                DocFinding(
+                    path="proj/CLAUDE.md",
+                    words=200,
+                    headers=3,
+                    list_items=2,
+                    is_redirect=False,
+                    staleness_days=5,
+                    flags=(),
+                ),
+            ),
+            dirs_checked=1,
+            dirs_without_docs=0,
+        )
+        text = render(
+            build_dash(
+                metrics=compute_metrics(prompts),
+                rubric=aggregate([]),
+                volumes=weekly_volumes(prompts, now=NOW),
+                prompt_count=1,
+                session_count=1,
+                since_label="all time",
+                docs=docs,
+            )
+        )
+        assert "docs · clean" in text
+        assert "docs quality" not in text
+
+    def test_docs_panel_shown_only_when_flagged(self):
+        prompts = [make("hello there friend", ref="1")]
+        docs = DocQualitySummary(
+            findings=(
+                DocFinding(
+                    path="proj/CLAUDE.md",
+                    words=10,
+                    headers=0,
+                    list_items=0,
+                    is_redirect=False,
+                    staleness_days=None,
+                    flags=("sparse",),
+                ),
+            ),
+            dirs_checked=1,
+            dirs_without_docs=0,
+        )
+        text = render(
+            build_dash(
+                metrics=compute_metrics(prompts),
+                rubric=aggregate([]),
+                volumes=weekly_volumes(prompts, now=NOW),
+                prompt_count=1,
+                session_count=1,
+                since_label="all time",
+                docs=docs,
+            )
+        )
+        assert "docs quality · 1 finding" in text
+        assert "docs · clean" not in text
+
+    def test_claude_code_pinned_first_in_volume_order(self):
+        prompts = [
+            make("a", source=SourceKind.COPILOT, ref="1"),
+            make("b", source=SourceKind.CLAUDE_CODE, ref="2"),
+        ]
+        vols = weekly_volumes(prompts, now=NOW)
+        text = render(
+            build_dash(
+                metrics=compute_metrics(prompts),
+                rubric=aggregate([]),
+                volumes=vols,
+                prompt_count=2,
+                session_count=2,
+                since_label="all time",
+            )
+        )
+        assert text.index("claude-code") < text.index("copilot")
+
+    def test_narrow_width_collapses_extra_stores(self):
+        prompts = [
+            make(f"p{i}", source=s, ref=str(i))
+            for i, s in enumerate(
+                [SourceKind.HERMES, SourceKind.COPILOT, SourceKind.CODEX, SourceKind.CLAUDE_CODE]
+            )
+        ]
+        vols = weekly_volumes(prompts, now=NOW)
+        text = render(
+            build_dash(
+                metrics=compute_metrics(prompts),
+                rubric=aggregate([]),
+                volumes=vols,
+                prompt_count=4,
+                session_count=4,
+                since_label="all time",
+                width=80,
+            ),
+            width=80,
+        )
+        assert "more…" in text
+
+    def test_plain_drops_sparkline_column(self):
+        prompts = [make("hello", weeks_ago=w, ref=str(w)) for w in range(5)]
+        vols = weekly_volumes(prompts, now=NOW)
+        text = render(
+            build_dash(
+                metrics=compute_metrics(prompts),
+                rubric=aggregate([]),
+                volumes=vols,
+                prompt_count=5,
+                session_count=5,
+                since_label="all time",
+                plain=True,
+            )
+        )
+        assert not any(block in text for block in "▁▂▃▄▅▆▇█")
+
+    def test_store_count_and_stale_suffix_in_header(self):
+        prompts = [make("hello", ref="1")]
+        text = render(
+            build_dash(
+                metrics=compute_metrics(prompts),
+                rubric=aggregate([]),
+                volumes=weekly_volumes(prompts, now=NOW),
+                prompt_count=1,
+                session_count=1,
+                since_label="all time",
+                store_count=4,
+                stale_count=1,
+            )
+        )
+        assert "4 stores" in text
+        assert "1 stale" in text
+
+
+class TestScoreBand:
+    def test_bands_and_labels(self):
+        assert score_band(0.82) == ("good", "green")
+        assert score_band(0.55) == ("fair", "yellow")
+        assert score_band(0.2) == ("weak", "red")
+        assert score_band(None) == ("n/a", "dim")
+
+    def test_label_low_n_suffix(self):
+        assert score_label(0.9, coverage=2) == "0.90 good (low n)"
+        assert score_label(0.9, coverage=10) == "0.90 good"
+        assert score_label(None) == "n/a"

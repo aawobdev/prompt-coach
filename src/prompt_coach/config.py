@@ -30,10 +30,29 @@ class StoresConfig:
     codex_dir: Path | None  # None = probe default candidates (/mnt/c, ~/.codex)
 
 
+# "coach": today's default -- only the calibrated weak-prompt triggers fire,
+#   at most once per session, and the hook blocks with an LLM rewrite offered
+#   (falls back to the old non-blocking tip if the LLM is unreachable).
+# "always": every UserPromptSubmit is blocked and rewritten by the LLM,
+#   regardless of quality or session history -- an explicit opt-in, since it
+#   adds LLM latency to every single prompt. If the LLM is unreachable, the
+#   prompt is let through unmodified rather than blocking with no way out.
+# "off": nudge never fires (UserPromptSubmit or Stop).
+_NUDGE_MODES = ("coach", "always", "off")
+DEFAULT_NUDGE_MODE = "coach"
+
+
+@dataclass(frozen=True)
+class NudgeConfig:
+    mode: str
+    llm_timeout: float  # bounded well below the hook's own timeout in settings.json
+
+
 @dataclass(frozen=True)
 class Config:
     llm: LLMConfig
     stores: StoresConfig
+    nudge: NudgeConfig
     cache_dir: Path
 
 
@@ -57,6 +76,7 @@ def load_config(path: Path | None = None) -> Config:
 
     llm_cfg = file_cfg.get("llm", {})
     stores_cfg = file_cfg.get("stores", {})
+    nudge_cfg = file_cfg.get("nudge", {})
 
     def env(name: str, fallback: str) -> str:
         return os.environ.get(f"PROMPT_COACH_{name}", fallback)
@@ -81,6 +101,11 @@ def load_config(path: Path | None = None) -> Config:
     codex_dir = Path(codex_raw).expanduser() if codex_raw else None
     cache_dir = Path(env("CACHE_DIR", str(_cache_dir()))).expanduser()
 
+    nudge_mode = env("NUDGE_MODE", nudge_cfg.get("mode", DEFAULT_NUDGE_MODE))
+    if nudge_mode not in _NUDGE_MODES:
+        raise ValueError(f"nudge mode {nudge_mode!r} must be one of {_NUDGE_MODES}")
+    nudge_llm_timeout = float(env("NUDGE_LLM_TIMEOUT", str(nudge_cfg.get("llm_timeout", 20.0))))
+
     return Config(
         llm=LLMConfig(
             base_url=base_url,
@@ -95,5 +120,6 @@ def load_config(path: Path | None = None) -> Config:
             copilot_dir=copilot_dir,
             codex_dir=codex_dir,
         ),
+        nudge=NudgeConfig(mode=nudge_mode, llm_timeout=nudge_llm_timeout),
         cache_dir=cache_dir,
     )
