@@ -723,3 +723,60 @@ sections), `~/.claude/commands/prompt-coach.md` (new, outside this repo).
 240 tests total (up from 231), ruff/black clean.
 **Decided by**: Alistair ("build it" on the Hermes side; the Claude Code
 command was built directly after "YES"), 2026-07-30.
+
+## 2026-07-30 - Hooks re-enabled, cache backfilled, thresholds checked against real data
+
+**Trigger**: working through the remaining pick-up list items in one pass:
+re-enable the nudge hooks, backfill model-fit coverage, and revisit the
+first-guess thresholds now that real data exists to check them against.
+**Decision/findings**:
+- Re-enabled the Claude Code hook in `~/.claude/settings.json`
+  (UserPromptSubmit 25s, Stop 10s), pointed at the installed
+  `/home/alistair/.local/bin/prompt-coach nudge` rather than `uv run
+  --project ...` -- the ~15-20% faster path found during the 2026-07-29
+  latency investigation. Verified the exact configured command against a
+  synthetic payload before considering it live.
+- Wired `~/.hermes/config.yaml`'s `hooks.pre_llm_call` to the same
+  binary. Verified via `hermes hooks test` -- which surfaced that the
+  test harness's `--payload-file` merges over a *flat* kwargs-shaped
+  default payload (`user_message` at top level, matching the Python
+  callback signature), not the wrapped `extra.user_message` wire shape
+  real firings use -- a harness quirk, not a bug in `_hermes_tip_response`;
+  confirmed once the payload was shaped to match. Left Hermes's own
+  first-use consent prompt intact rather than pre-approving it in the
+  allowlist file myself -- that's a deliberate one-time confirmation
+  designed for the user to see, not something to skip on their behalf.
+- Live-testing also caught that the installed tool was stale (still
+  showed the pre-fix "before Claude starts" wording) -- `uv tool install
+  --force .` needs re-running after every source change, which is easy to
+  forget; re-ran it and verified the fix landed.
+- Backfilled model-fit coverage: `cache clear` + resync took coverage
+  from 16/916 to 458/712 classifiable. Real findings: 5 "overpowered"
+  (claude-opus-4-8 used on short prompts), 0 "underpowered" (no
+  small-tier models used on high-demand prompts in this corpus at all).
+- Checked demand/tier thresholds against the real distribution rather
+  than guessing whether they needed changing: prompt-length percentiles
+  (p75=156, p90=402, p95=1557 chars) put the 200/1200-char low/high
+  cutoffs at roughly the 75th and 90-95th percentiles -- reasonable
+  population splits, not arbitrary. The 9b/39b tier boundary cleanly
+  separates every real local model observed (8b models land small,
+  26-35b models land medium, no ambiguous boundary cases). The low
+  overall finding rate (5/458 classifiable, ~1%) confirms the system
+  isn't noisy despite demand-tier being a crude single-message-length
+  proxy -- most individual turns are short regardless of task complexity
+  (median ~84 chars), but false positives stay rare because "large-tier
+  model usage" is itself rare in this corpus.
+- Re-checked the nudge short-vague keyword list against the fresh,
+  larger corpus (1376 human prompts, up from 1739 at a different
+  snapshot in time): trigger rate is 1.5% now vs. 1.5% at the original
+  2026-07-27 calibration. Stable, no drift -- no change made.
+**Why recording a "no change needed" outcome**: both thresholds were
+flagged on the pick-up list as first-guess, revisit-if-noisy. Verifying
+they're fine and writing that down prevents a future session from
+re-litigating the same question from scratch with no new information --
+same value as recording a change, just the opposite conclusion.
+**Affects**: `~/.claude/settings.json`, `~/.hermes/config.yaml` (both
+outside this repo), local `~/.cache/prompt-coach/cache.db` (cleared and
+resynced). No source code changes -- this entry is a verification record,
+not a build.
+**Decided by**: Alistair ("all of it"), 2026-07-30.

@@ -1,7 +1,10 @@
 # Project Status - prompt-coach
 Last updated: 2026-07-30 by Claude (Sonnet 5): Claude Code slash command +
-Hermes nudge equivalent shipped, two test gaps closed, and CI added. 243
-tests, up from 231. Not yet committed - see git status.
+Hermes nudge equivalent shipped, two test gaps closed, CI added, both
+hooks re-enabled live, cache backfilled, thresholds checked against real
+data. 243 tests, up from 231. This code is committed and pushed (main);
+the hook/config changes below are outside this repo (~/.claude/,
+~/.hermes/, ~/.cache/) and were applied directly, not just documented.
 
 ## Claude Code slash command + Hermes nudge equivalent (2026-07-30)
 
@@ -238,32 +241,19 @@ See DECISIONS.md for the ChatGPT-vs-Codex priority call.
    nudge, and now the Claude Code slash command + Hermes nudge equivalent)
    is sitting in the working tree, not committed - see git status. Decide
    commit granularity before starting new work.
-0e. **Hermes hook not actually wired**: the `pre_llm_call` -> `prompt-coach
-   nudge` snippet is documented in README.md but not added to the real
-   `~/.hermes/config.yaml` - same reasoning as not auto-enabling the
-   Claude Code hook, this touches live config and Alistair should opt in.
-   Also untested against a real `hermes chat` session (only smoke-tested
-   with a synthetic stdin payload matching the documented wire protocol).
-0c. **install.sh not yet run for real**: syntax-checked and its individual
-   pieces (`uv tool install`, PATH check) verified logically, but the
-   script end-to-end was not actually run against the user's real
-   `~/.local/bin` - do that once, and confirm the `prompt-coach setup`
-   hand-off at the end works from a truly fresh shell.
-0d. **Nudge hook still not re-registered** in `~/.claude/settings.json`
-   (disabled since before the 2026-07-29 latency fix) - re-enabling it is
-   the natural next step now that `setup` can configure mode/dir_overrides
-   without hand-editing config.toml, but that's still Alistair's call.
-0a. **Model fit backfill**: run `prompt-coach cache clear` once (then a
-   normal sync) to get real coverage numbers - historical cached prompts
-   don't retroactively gain a `model` value, so today's live smoke only
-   showed 16/916 classifiable. Cache is fully disposable/re-derivable per
-   the project's own retention story, but clearing it wasn't done
-   automatically since it touches real local data.
-0b. Model fit's thresholds (`_LOW_DEMAND_CHARS=200`, `_HIGH_DEMAND_CHARS=
-   1200`, `_SMALL_MAX_B=9`, `_MEDIUM_MAX_B=39`) are first-guess, not
-   calibrated against labelled data - revisit once the backfill above
-   gives a real sample of findings to look at (same posture as docs.py's
-   thresholds when they shipped).
+**Resolved 2026-07-30** (was 0a-0e above; see DECISIONS.md for full detail
+on each): Claude Code hook re-enabled in `~/.claude/settings.json`
+(pointed at the installed binary, not `uv run`); Hermes's `pre_llm_call`
+wired into `~/.hermes/config.yaml` and verified via `hermes hooks test`
+(one real gap remains: Hermes's own first-use consent prompt hasn't fired
+yet in an actual `hermes chat` session - expected, left for Alistair to
+click through once); `install.sh` run for real, found and fixed the
+ANSI-color-leak bug; cache cleared and resynced, model-fit coverage now
+458/712 (was 16/916); model-fit and nudge-keyword thresholds checked
+against the real backfilled data and found already well-calibrated - no
+changes made, the "no change needed" finding is recorded rather than
+silently assumed.
+
 1. Nudge's `coach`/`always` block-and-rewrite path was only smoke-tested
    with the LLM unreachable (sandboxed dev environment) or mocked
    (`_make_llm`/`rewrite_prompt` monkeypatched in tests) - never against a
@@ -275,10 +265,10 @@ See DECISIONS.md for the ChatGPT-vs-Codex priority call.
    deciding whether 20s is too generous/stingy, and whether `coach` mode's
    silent LLM-unreachable-once-per-session probe (an `httpx.get` on every
    trigger) is worth caching.
-3. The short-vague nudge keyword list (`everything`/`all of`/`whole`/
-   `revamp`) was calibrated on only 26 matching prompts - real signal, but
-   a small sample; revisit if it misses obvious cases or fires on harmless
-   ones in daily use.
+3. **Resolved 2026-07-30**: re-checked the short-vague keyword list
+   against a fresher, larger corpus - trigger rate held stable at 1.5%
+   (matching the original 2026-07-27 calibration exactly). No drift, no
+   change made. See DECISIONS.md.
 4. Optional: ChatGPT importer verification if a real export ever shows up
    (`prompt-coach import <export.zip>`, clear UNVERIFIED markers here and
    in BLUEPRINT.md 16.2) - no longer the priority gap, see DECISIONS.md.
