@@ -1141,3 +1141,48 @@ docs, so `nudge.py` resolves the longest matching `cwd` prefix itself.
 round-trip-safe with `load_config`) rather than a new TOML-writing
 dependency. 231 tests total (up from 213): tests/test_config.py (new),
 test_nudge.py/test_cli.py extended.
+
+**17.4 Claude Code slash command + Hermes nudge equivalent** (2026-07-30):
+`~/.claude/commands/prompt-coach.md` (global, outside this repo) runs
+`` !`prompt-coach $ARGUMENTS` `` with `allowed-tools: Bash(prompt-coach
+*)`, so `/prompt-coach report --since 7d` etc. works from any project.
+Checked Copilot Chat and Codex CLI too: Copilot's prompt files can't
+embed shell execution (confirmed against the official VS Code docs, not
+assumed), and Codex isn't installed as a standalone binary here -- both
+inherit the same constraint, so no shortcut was built for either; both
+already work via asking the agent directly, since they have full
+tool-calling access regardless. `nudge.py`'s `build_response` now also
+dispatches Hermes's `pre_llm_call` shell hook (`_hermes_tip_response`) --
+Hermes's own docs call this event the `UserPromptSubmit` equivalent and
+its shell hooks accept Claude Code's JSON response shapes directly, but
+`pre_llm_call` can only inject `{"context": ...}`, never block, so this
+path is deterministic tip-only regardless of nudge mode (`always` has no
+meaningful translation for a context-only hook, so it collapses to
+`coach`'s behavior). The same `prompt-coach nudge` command serves both
+platforms -- it was already harness-agnostic. Found and fixed a real bug
+via live smoke testing: `_TIP_SCOPE`'s text said "before Claude starts",
+hardcoded even though the hook now also fires for Hermes sessions running
+arbitrary models -- genericized to "before the agent starts". 240 tests
+(up from 231): tests/test_nudge.py `TestHermesPreLlmCall` added.
+
+**17.5 CI, test-gap follow-up, and live verification** (2026-07-30):
+`.github/workflows/ci.yml` runs pytest/ruff/black/em-dash-check on every
+push -- nothing ran automatically before. Rehearsing it locally from a
+clean `.venv` (not just the already-primed environment) caught a real bug
+before it reached GitHub: bare `uv sync` does not install the `dev`
+optional-dependencies group, so both the workflow and AGENTS.md's
+documented Commands section needed `uv sync --extra dev`. Two test gaps
+also closed: tests/test_import_hygiene.py (subprocess-based check that
+`openai` is never eagerly imported by nudge.py/cli.py, guarding the 17.2
+latency fix from regressing) and a `setup` wizard test for entering a
+public LLM URL (`RemoteEndpointRefused` was already handled in code, just
+untested). 243 tests total. Separately, both hooks were re-enabled for
+real: `~/.claude/settings.json` (pointed at the installed binary, not `uv
+run`, for the faster path found during 17.2) and `~/.hermes/
+config.yaml` (verified via `hermes hooks test`, which surfaced a payload-
+shape quirk in that harness, not a bug in prompt-coach). Cache cleared
+and resynced, taking model-fit coverage from 16/916 to 458/712
+classifiable, and the model-fit/nudge-keyword thresholds were checked
+against that real data and found already well-calibrated -- no changes
+made, the "no change needed" finding recorded in DECISIONS.md rather than
+left ambiguous for a future session to re-litigate.
