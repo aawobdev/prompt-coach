@@ -15,10 +15,17 @@ back to a content hash like the Copilot store. One file per session
 
 On WSL the Windows profile is read directly via /mnt/c; a native Linux
 profile is probed as a fallback.
+
+Model capture (2026-07-29): `type=turn_context` lines carry `payload.model`
+and, confirmed live, appear right AFTER the `user_message` event for that
+turn (not before), so the prompt is held pending until the next
+turn_context line resolves it -- same pending/flush shape as the Claude
+Code store, just simpler since there's no parentUuid to match.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from collections.abc import Iterator
@@ -110,6 +117,7 @@ class CodexStore:
         # session_meta (cwd) is always line 1; resumed reads (from_offset > 0)
         # start past it, so cwd is None on incrementally-synced prompts.
         cwd: str | None = None
+        pending: tuple[int, Prompt] | None = None
         with open(path, "rb") as f:
             if from_offset:
                 f.seek(from_offset)
@@ -127,9 +135,20 @@ class CodexStore:
                     if isinstance(payload, dict) and isinstance(payload.get("cwd"), str):
                         cwd = payload["cwd"]
                     continue
+                if obj.get("type") == "turn_context":
+                    payload = obj.get("payload")
+                    model = payload.get("model") if isinstance(payload, dict) else None
+                    if pending is not None and isinstance(model, str):
+                        yield pending[0], dataclasses.replace(pending[1], model=model)
+                        pending = None
+                    continue
                 prompt = _line_to_prompt(obj, session_id, cwd)
                 if prompt is not None:
-                    yield offset, prompt
+                    if pending is not None:
+                        yield pending
+                    pending = (offset, prompt)
+            if pending is not None:
+                yield pending
 
     def iter_prompts(self, since: datetime | None = None) -> Iterator[Prompt]:
         for path in self.iter_files():

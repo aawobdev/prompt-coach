@@ -1,8 +1,120 @@
 # Project Status - prompt-coach
-Last updated: 2026-07-27 by Claude (Sonnet 5): CLI Visual Spec implemented
-(dash/stats/report polish, D1-D9), sync progress bar added, and nudge
-substantially upgraded (Stop hook, short-vague trigger, LLM block-and-
-rewrite modes). 186 tests, up from 152. Not yet committed - see git status.
+Last updated: 2026-07-30 by Claude (Sonnet 5): Claude Code slash command +
+Hermes nudge equivalent shipped, two test gaps closed, and CI added. 243
+tests, up from 231. Not yet committed - see git status.
+
+## Claude Code slash command + Hermes nudge equivalent (2026-07-30)
+
+DECISIONS.md has the full platform-by-platform research (Claude Code,
+Hermes, Copilot, Codex all checked against current docs, not assumed).
+Shipped:
+- `~/.claude/commands/prompt-coach.md` (global, outside this repo):
+  `/prompt-coach report --since 7d` etc. runs the real CLI and injects its
+  output into context.
+- `nudge.py`/`build_response` now also handles Hermes's `pre_llm_call`
+  shell hook (`_hermes_tip_response`) - same calibrated triggers/once-
+  per-session gate, but tip-only via `{"context": ...}` since Hermes's
+  hook can't block the way Claude Code's UserPromptSubmit can. Same
+  `prompt-coach nudge` command serves both platforms; wiring snippet for
+  `~/.hermes/config.yaml` is in README.md.
+- Copilot/Codex: no dedicated shortcut built - confirmed against the
+  official VS Code docs that Copilot's prompt files can't do shell
+  injection, and Codex isn't installed as a standalone CLI here. Both
+  already work via "ask it directly in chat," just without a slash-command
+  shortcut.
+- **Bug found and fixed via live smoke test**: nudge's scope-tip text
+  said "before Claude starts", hardcoded even though the hook now also
+  fires for Hermes sessions running arbitrary models. Genericized.
+- 240 tests (up from 231): tests/test_nudge.py `TestHermesPreLlmCall`
+  added. ruff/black clean, no em dashes.
+- Follow-up (same session): two gaps closed after asking "do we need more
+  tests?" - tests/test_import_hygiene.py (subprocess-based regression
+  guard: fails if `openai` ever gets eagerly imported by nudge.py/cli.py
+  again, protecting the 2026-07-29 latency fix) and a `setup` wizard test
+  for entering a public LLM URL (RemoteEndpointRefused was already caught
+  in code, just untested). 243 tests total.
+- **CI added** (`.github/workflows/ci.yml`, new): pytest, ruff, black, and
+  an em-dash check on every push/PR - none of this ran automatically
+  before. Rehearsing it locally from a clean `.venv` caught a real bug
+  before it ever reached GitHub: bare `uv sync` does not install the `dev`
+  optional-dependencies group (pytest/ruff/black), so the workflow
+  originally failed at the test step. Fixed to `uv sync --extra dev`,
+  and AGENTS.md's Commands section had the same bare `uv sync` mistake -
+  fixed there too (README's Quick Start was fine, it never runs
+  pytest/ruff/black). Confirmed passing end-to-end from a from-scratch
+  `.venv` before considering it done, not just re-using the already-primed
+  local environment.
+
+## Setup wizard, install.sh, store enable/disable, per-directory nudge (2026-07-30)
+
+BLUEPRINT.md 17.3 has the shape; DECISIONS.md (2026-07-29 "Setup
+experience" entry + 2026-07-30 "per-directory nudge" entry) has the full
+reasoning. Highlights:
+- `install.sh` (repo root): `uv tool install --force .` + offers to run
+  `prompt-coach setup`. Not a compiled binary - deferred until/unless
+  nudge-hook latency (fixed below, but not to zero) is still a problem.
+- `prompt-coach setup`: per-store enable/disable with live discover()
+  counts shown, LLM endpoint/model with a live reachability check, nudge/
+  model-fit mode, an optional per-directory nudge override for the
+  directory setup is run from, then offers to run `report`/`dash`
+  immediately. Writes `~/.config/prompt-coach/config.toml` via a new
+  hand-formatted TOML writer (no new dependency - tomllib is read-only).
+- `StoresConfig.enabled`: opt-in list, default all four live stores
+  (Hermes/Claude Code/Copilot/Codex), so a store present on disk is only
+  used if named. `default_stores()` in cli.py filters on it.
+- `NudgeConfig.dir_overrides`: config.toml-only path->mode mapping.
+  Checked Claude Code's hooks docs live before building anything: hooks
+  registered at different scopes (global/project settings.json) merge
+  rather than override, so there's no way to exclude one project from a
+  globally-registered hook via Claude Code's own settings - per-directory
+  control has to live in prompt-coach itself, keyed off the hook
+  payload's `cwd` (confirmed present on both UserPromptSubmit and Stop).
+  `nudge.py`'s `_resolve_mode()` picks the longest matching path prefix.
+- Verified live: full `setup` run against the real corpus (65 Hermes
+  sessions, 89 Claude Code, 167 Copilot, 1 Codex) correctly excluded a
+  disabled store from a subsequent `discover`; LLM reachability check
+  correctly reported "reachable now" against the live desktop Ollama.
+- 231 tests (up from 213): tests/test_config.py new; test_nudge.py and
+  test_cli.py extended (interactive wizard flows via CliRunner `input=`).
+  ruff/black clean, no em dashes.
+
+## Nudge hook latency fixed (2026-07-29)
+
+Alistair had disabled the nudge hook (`hooks: {}` in settings.json),
+suspecting delay. Confirmed live: `cli.py` and `nudge.py` eagerly imported
+the entire CLI + the `openai` SDK on every single prompt submission
+regardless of mode, dominated by `openai`'s own type surface (~700-900ms).
+Fixed via lazy per-command imports; mode=off/non-triggering dropped from
+~1.3-1.5s to ~0.4-0.5s per prompt (roughly 3x). Full numbers and root
+cause in DECISIONS.md. **Hook is still not re-registered in
+`~/.claude/settings.json`** - that's a decision for Alistair now that the
+cost is measured, not done automatically since it touches live Claude Code
+config.
+
+## Model fit (2026-07-29)
+
+New analysis dimension: flags prompts where what they demanded and the
+model that handled them look mismatched. Deterministic only, no LLM call.
+See DECISIONS.md (two entries, 2026-07-29) for the full scope decision and
+build detail. Highlights:
+- `Prompt.model` captured in all four live stores, per-turn where the
+  store supports it (Claude Code, Codex CLI), per-request (Copilot), or
+  session-level only (Hermes, no per-message model column exists).
+- `analysis/model_fit.py`: `classify_model_tier` (Claude's public haiku/
+  sonnet/opus ladder + param-count regex for local models; unclassified
+  rather than guessed for gpt-5-codex, claude-fable-5, copilot/auto),
+  `estimate_demand_tier` (char-length buckets, first-guess thresholds),
+  `detect_mismatches` (off/descriptive/prescriptive modes, `NudgeConfig`-
+  style config at `ModelFitConfig`).
+- New dash panel and report section, both privacy-safe (no prompt content,
+  same rule as the docs-quality panel).
+- **Known gap, found live**: the cache dedupes on insert, so prompts
+  already cached before this change keep `model=NULL` forever; only
+  freshly-synced prompts (or a `cache clear` + resync) populate it. Real
+  corpus currently shows 16/916 eligible prompts classifiable until that
+  happens. Not a bug, just a one-time backfill the user needs to trigger.
+- 213 tests (up from 186): new tests/test_model_fit.py plus store/cache/
+  nudge fixture updates for the new field. ruff and black clean.
 
 ## CLI visual polish + nudge upgrades (2026-07-27)
 
@@ -121,10 +233,37 @@ See DECISIONS.md for the ChatGPT-vs-Codex priority call.
 ## Next session pick-up list
 
 0. **Uncommitted**: this whole session's work (CLI visual polish, progress
-   bar, nudge Stop/short-vague/block-rewrite) is sitting in the working
-   tree, not committed - see git status. Decide commit granularity (one
-   bundled commit vs. split to match the DECISIONS.md entries) before
-   starting new work.
+   bar, nudge Stop/short-vague/block-rewrite, model fit, the nudge latency
+   fix, the setup wizard/install.sh/store enable-disable/per-directory
+   nudge, and now the Claude Code slash command + Hermes nudge equivalent)
+   is sitting in the working tree, not committed - see git status. Decide
+   commit granularity before starting new work.
+0e. **Hermes hook not actually wired**: the `pre_llm_call` -> `prompt-coach
+   nudge` snippet is documented in README.md but not added to the real
+   `~/.hermes/config.yaml` - same reasoning as not auto-enabling the
+   Claude Code hook, this touches live config and Alistair should opt in.
+   Also untested against a real `hermes chat` session (only smoke-tested
+   with a synthetic stdin payload matching the documented wire protocol).
+0c. **install.sh not yet run for real**: syntax-checked and its individual
+   pieces (`uv tool install`, PATH check) verified logically, but the
+   script end-to-end was not actually run against the user's real
+   `~/.local/bin` - do that once, and confirm the `prompt-coach setup`
+   hand-off at the end works from a truly fresh shell.
+0d. **Nudge hook still not re-registered** in `~/.claude/settings.json`
+   (disabled since before the 2026-07-29 latency fix) - re-enabling it is
+   the natural next step now that `setup` can configure mode/dir_overrides
+   without hand-editing config.toml, but that's still Alistair's call.
+0a. **Model fit backfill**: run `prompt-coach cache clear` once (then a
+   normal sync) to get real coverage numbers - historical cached prompts
+   don't retroactively gain a `model` value, so today's live smoke only
+   showed 16/916 classifiable. Cache is fully disposable/re-derivable per
+   the project's own retention story, but clearing it wasn't done
+   automatically since it touches real local data.
+0b. Model fit's thresholds (`_LOW_DEMAND_CHARS=200`, `_HIGH_DEMAND_CHARS=
+   1200`, `_SMALL_MAX_B=9`, `_MEDIUM_MAX_B=39`) are first-guess, not
+   calibrated against labelled data - revisit once the backfill above
+   gives a real sample of findings to look at (same posture as docs.py's
+   thresholds when they shipped).
 1. Nudge's `coach`/`always` block-and-rewrite path was only smoke-tested
    with the LLM unreachable (sandboxed dev environment) or mocked
    (`_make_llm`/`rewrite_prompt` monkeypatched in tests) - never against a

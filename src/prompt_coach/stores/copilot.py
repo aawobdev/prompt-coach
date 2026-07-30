@@ -10,6 +10,14 @@ re-read the kind-0 line.
 
 On WSL the Windows VS Code profile is read directly via /mnt/c; a native
 Linux profile is probed as a fallback.
+
+Model capture (2026-07-29): each request carries its own `modelId`
+(`copilot/claude-haiku-4.5`, `ollama/Ollama/devstral-24b:latest`, etc.),
+confirmed live -- this is the per-request selection, not a session-wide
+"currently selected" value. `copilot/auto` means Copilot picked the model
+itself; the raw value is still stored (stores capture facts, analysis
+decides what's classifiable), so downstream code treats it as
+unattributable rather than the store silently discarding it.
 """
 
 from __future__ import annotations
@@ -55,6 +63,7 @@ def _request_to_prompt(req: dict, session_id: str) -> Prompt | None:
     ts_ms = req.get("timestamp")
     if not isinstance(ts_ms, int | float):
         return None
+    model_id = req.get("modelId")
     return Prompt(
         source=SourceKind.COPILOT,
         session_id=session_id,
@@ -63,6 +72,7 @@ def _request_to_prompt(req: dict, session_id: str) -> Prompt | None:
         content_hash=content_hash(text),
         timestamp=datetime.fromtimestamp(ts_ms / 1000.0, tz=UTC),
         origin=classify_origin(text),
+        model=model_id if isinstance(model_id, str) else None,
     )
 
 

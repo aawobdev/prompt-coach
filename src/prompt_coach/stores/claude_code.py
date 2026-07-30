@@ -6,10 +6,21 @@ only when ALL filters in BLUEPRINT.md 4.3 hold; everything else (tool
 results, hook output, subagent traffic, command echoes, system reminders,
 malformed lines) is skipped. iter_file yields byte offsets so the cache can
 resume grown (append-only) files incrementally.
+
+Model capture (2026-07-29): the model that answered a turn lives on the
+*following* `type: "assistant"` line's `message.model`, linked back via
+`parentUuid` -- confirmed live that sessions genuinely mix models
+(`/model` switches mid-conversation), so this is per-turn, not
+per-session. A prompt is held pending until either a matching assistant
+reply is seen or the next prompt/EOF arrives, at which point it is
+flushed (with model=None if nothing matched). `<synthetic>` is a
+placeholder value Claude Code emits for some internal turns, not a real
+model, and is filtered out at the source.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from collections.abc import Iterator
@@ -81,6 +92,21 @@ def parse_line(line: str) -> Prompt | None:
     )
 
 
+def _assistant_model_for(line: str, want_parent_uuid: str) -> str | None:
+    """None unless `line` is the assistant reply to `want_parent_uuid`
+    carrying a real model name (not the `<synthetic>` placeholder)."""
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict) or obj.get("type") != "assistant":
+        return None
+    if obj.get("parentUuid") != want_parent_uuid:
+        return None
+    model = (obj.get("message") or {}).get("model")
+    return model if isinstance(model, str) and model != "<synthetic>" else None
+
+
 class ClaudeCodeStore:
     kind = SourceKind.CLAUDE_CODE
 
@@ -108,17 +134,33 @@ class ClaudeCodeStore:
         """Yield (byte_offset_after_line, prompt) from one transcript.
 
         Offsets are byte positions so the cache's file_state can resume
-        append-only files exactly where the previous sync stopped.
+        append-only files exactly where the previous sync stopped. A prompt
+        is held back one step (`pending`) so its model can be attached from
+        the assistant reply that follows it -- see the module docstring.
+        The held prompt's own offset is preserved (not shifted to wherever
+        it gets flushed) so resume semantics are unchanged.
         """
+        pending: tuple[int, Prompt] | None = None
         with open(path, "rb") as f:
             if from_offset:
                 f.seek(from_offset)
             offset = from_offset
             for raw in f:
                 offset += len(raw)
-                prompt = parse_line(raw.decode("utf-8", errors="replace"))
+                text = raw.decode("utf-8", errors="replace")
+                prompt = parse_line(text)
                 if prompt is not None:
-                    yield offset, prompt
+                    if pending is not None:
+                        yield pending
+                    pending = (offset, prompt)
+                    continue
+                if pending is not None:
+                    model = _assistant_model_for(text, pending[1].message_ref)
+                    if model is not None:
+                        yield pending[0], dataclasses.replace(pending[1], model=model)
+                        pending = None
+            if pending is not None:
+                yield pending
 
     def iter_prompts(self, since: datetime | None = None) -> Iterator[Prompt]:
         for path in self.iter_files():

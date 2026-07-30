@@ -72,7 +72,7 @@ uv run prompt-coach query "what did I work on last week?"
 ## Commands
 
 ```bash
-uv sync                  # install deps
+uv sync --extra dev      # install deps, including pytest/ruff/black (bare `uv sync` omits them)
 uv run pytest            # unit + integration tests
 uv run ruff check .      # lint
 uv run black --check .   # format

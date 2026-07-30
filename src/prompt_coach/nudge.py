@@ -27,6 +27,19 @@ calibrated patterns: a long prompt (>=200 chars) missing output shape
 corpus, not a guessed list). UserPromptSubmit and Stop share the same
 once-per-session gate in coach mode, so whichever moment catches a weak
 prompt first is the only one that speaks.
+
+Also handles Hermes's `pre_llm_call` shell hook (2026-07-30): Hermes's own
+docs describe this event as "Claude Code's UserPromptSubmit equivalent"
+and its shell hooks accept the same JSON wire protocol -- but the payload
+shape differs (the user's message is at `extra.user_message`, not a
+top-level `prompt`), and critically `pre_llm_call` can only inject
+context, it cannot block. There's no way to hold a message back and offer
+a rewrite the way Claude Code's UserPromptSubmit can, so the Hermes path
+is deterministic tip-only (same calibrated triggers, same once-per-session
+gate) regardless of nudge mode -- "off" still disables it entirely, but
+"always" has no meaningful translation here (there's nothing to
+"always block and rewrite"), so it collapses to the same coach-style
+behavior as "coach".
 """
 
 from __future__ import annotations
@@ -34,12 +47,24 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from prompt_coach.analysis.metrics import has_constraints, has_example, has_structured_output
 from prompt_coach.config import Config
-from prompt_coach.llm.client import LLMUnavailable, LocalLLM, RemoteEndpointRefused
 from prompt_coach.models import PromptOrigin
 from prompt_coach.stores.claude_code import parse_line
+
+if TYPE_CHECKING:  # never imported at runtime -- see the note below
+    from prompt_coach.llm.client import LocalLLM
+
+# llm.client is NOT imported at module scope: it pulls in the `openai` SDK,
+# whose own type surface (Assistants/Threads/Batches/Evals APIs we never
+# use) costs ~700-900ms to import alone (measured 2026-07-29). This module
+# runs synchronously on every Claude Code prompt submission (see the module
+# docstring), so paying that tax when mode is "off" or no trigger fired --
+# the common case -- would be a real, constant per-prompt delay for no
+# benefit. Imported lazily in rewrite_prompt()/_make_llm() instead, so it's
+# only paid on the turns that actually call the LLM.
 
 _MIN_PROMPT_CHARS = 200  # matches rubric.py's A4 structure threshold
 _MAX_TRACKED_SESSIONS = 500  # bound the state file; oldest entries dropped
@@ -53,7 +78,7 @@ _TIP_SHAPE = (
 _TIP_SCOPE = (
     "prompt-coach tip: that's a big, open-ended ask with nothing scoping it -- "
     "consider naming what's in scope (or explicitly out of scope) before "
-    "Claude starts."
+    "the agent starts."  # platform-neutral: this hook now also fires for Hermes (2026-07-30)
 )
 
 # Calibrated against the real corpus (2026-07-27 spike), not guessed: these
@@ -142,6 +167,8 @@ def rewrite_prompt(prompt: str, llm: LocalLLM) -> str | None:
     failure (unreachable, malformed output) -- callers must have a
     non-LLM fallback; nudge must never leave a prompt stuck with no way
     forward."""
+    from prompt_coach.llm.client import LLMUnavailable
+
     try:
         result = llm.complete_json(_REWRITE_SYSTEM, prompt, max_tokens=800)
     except LLMUnavailable:
@@ -153,6 +180,8 @@ def rewrite_prompt(prompt: str, llm: LocalLLM) -> str | None:
 def _make_llm(cfg: Config) -> LocalLLM | None:
     """LocalLLM bounded by nudge's own (short) timeout, not report/query's
     120s default -- this runs inline in a hook, not a background job."""
+    from prompt_coach.llm.client import LocalLLM, RemoteEndpointRefused
+
     try:
         llm = LocalLLM(
             cfg.llm.base_url,
@@ -181,18 +210,63 @@ def _rewrite_or_fallback(prompt: str, llm: LocalLLM | None, fallback_message: st
     return {"decision": "block", "reason": _block_reason(rewritten)}
 
 
+def _resolve_mode(cfg: Config, cwd: str | None) -> str:
+    """Claude Code's hook settings can't override a globally-registered hook
+    per project -- hooks merge across scopes, they don't replace (checked
+    live, DECISIONS.md 2026-07-30) -- so per-directory control lives here
+    instead, keyed off the hook payload's own `cwd`. The longest matching
+    path prefix in `cfg.nudge.dir_overrides` wins, so a nested override can
+    be more specific than a parent directory; falls back to the global mode."""
+    if not cwd or not cfg.nudge.dir_overrides:
+        return cfg.nudge.mode
+    best_match: str | None = None
+    best_len = -1
+    for override_path, mode in cfg.nudge.dir_overrides.items():
+        normalized = override_path.rstrip("/")
+        if (cwd == normalized or cwd.startswith(normalized + "/")) and len(normalized) > best_len:
+            best_len = len(normalized)
+            best_match = mode
+    return best_match if best_match is not None else cfg.nudge.mode
+
+
+def _hermes_tip_response(payload: dict, cfg: Config) -> dict:
+    """Hermes's `pre_llm_call` shell hook: same JSON wire protocol as Claude
+    Code's UserPromptSubmit (Hermes's own docs call this event the direct
+    equivalent), but the message lives at `extra.user_message`, and
+    `pre_llm_call` can only inject `{"context": ...}` -- it cannot block, so
+    there's no rewrite-and-hold-back flow here. Deterministic tip only,
+    regardless of nudge mode (see module docstring)."""
+    mode = _resolve_mode(cfg, payload.get("cwd"))
+    if mode == "off":
+        return {}
+    session_id = payload.get("session_id", "")
+    if not session_id:
+        return {}
+    prompt = (payload.get("extra") or {}).get("user_message", "")
+    if not prompt:
+        return {}
+    tip = evaluate(prompt, session_id, cfg.cache_dir)
+    return {"context": tip} if tip else {}
+
+
 def build_response(payload: dict, cfg: Config) -> dict:
     """The one function the CLI calls: dispatches on `hook_event_name` and
-    `cfg.nudge.mode`. Handles UserPromptSubmit (which can block-and-rewrite)
-    and Stop (tip-only, coach mode only -- see module docstring)."""
-    if cfg.nudge.mode == "off":
+    the resolved nudge mode (global `cfg.nudge.mode`, or a per-directory
+    override -- see `_resolve_mode`). Handles Claude Code's UserPromptSubmit
+    (which can block-and-rewrite) and Stop (tip-only, coach mode only), plus
+    Hermes's `pre_llm_call` (tip-only always -- see `_hermes_tip_response`)."""
+    if payload.get("hook_event_name") == "pre_llm_call":
+        return _hermes_tip_response(payload, cfg)
+
+    mode = _resolve_mode(cfg, payload.get("cwd"))
+    if mode == "off":
         return {}
     session_id = payload.get("session_id", "")
     if not session_id:
         return {}
 
     if payload.get("hook_event_name") == "Stop":
-        if cfg.nudge.mode != "coach":
+        if mode != "coach":
             return {}
         transcript = payload.get("transcript_path")
         return hook_response_stop(session_id, Path(transcript), cfg.cache_dir) if transcript else {}
@@ -201,7 +275,7 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if not prompt:
         return {}
 
-    if cfg.nudge.mode == "always":
+    if mode == "always":
         return _rewrite_or_fallback(prompt, _make_llm(cfg), fallback_message=None)
 
     # "coach": only the calibrated triggers, once per session.

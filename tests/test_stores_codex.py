@@ -26,6 +26,16 @@ def user_message(text, kind="plain", ts="2026-07-01T12:00:05.000Z"):
     )
 
 
+def turn_context(model="gpt-5-codex"):
+    return json.dumps(
+        {
+            "timestamp": "2026-07-01T12:00:05.500Z",
+            "type": "turn_context",
+            "payload": {"cwd": "c:\\proj", "model": model},
+        }
+    )
+
+
 def other_event(payload_type="agent_reasoning"):
     return json.dumps(
         {
@@ -95,6 +105,38 @@ def test_non_user_message_events_ignored(tmp_path):
 def test_empty_message_skipped(tmp_path):
     write_session(tmp_path, "s5", [session_meta(), user_message("   ")])
     assert list(CodexStore(tmp_path).iter_prompts()) == []
+
+
+def test_model_attached_from_following_turn_context(tmp_path):
+    write_session(
+        tmp_path,
+        "s8",
+        [session_meta(), user_message("fix the layout bug"), turn_context("gpt-5-codex")],
+    )
+    prompts = list(CodexStore(tmp_path).iter_prompts())
+    assert prompts[0].model == "gpt-5-codex"
+
+
+def test_model_switch_mid_session_is_per_turn(tmp_path):
+    write_session(
+        tmp_path,
+        "s9",
+        [
+            session_meta(),
+            user_message("first ask", ts="2026-07-01T12:00:05.000Z"),
+            turn_context("gpt-5-codex"),
+            user_message("second ask", ts="2026-07-01T12:00:10.000Z"),
+            turn_context("gpt-5-codex-mini"),
+        ],
+    )
+    prompts = list(CodexStore(tmp_path).iter_prompts())
+    assert [p.model for p in prompts] == ["gpt-5-codex", "gpt-5-codex-mini"]
+
+
+def test_no_turn_context_leaves_model_none(tmp_path):
+    write_session(tmp_path, "s10", [session_meta(), user_message("no context follows")])
+    prompts = list(CodexStore(tmp_path).iter_prompts())
+    assert prompts[0].model is None
 
 
 def test_offset_resume(tmp_path):

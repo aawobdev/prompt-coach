@@ -24,13 +24,13 @@ def env(tmp_path, monkeypatch):
     conn.executescript(
         """
         CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, started_at REAL,
-            title TEXT, cwd TEXT, git_repo_root TEXT);
+            title TEXT, cwd TEXT, git_repo_root TEXT, model TEXT);
         CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT,
             content TEXT, timestamp REAL, active INTEGER DEFAULT 1,
             compacted INTEGER DEFAULT 0);
         """
     )
-    conn.execute("INSERT INTO sessions VALUES ('s1','cli',?, 'Fix nginx', '/p', '/p')", (T0,))
+    conn.execute("INSERT INTO sessions VALUES ('s1','cli',?, 'Fix nginx', '/p', '/p', NULL)", (T0,))
     conn.executemany(
         "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?,?,?,?)",
         [
@@ -66,6 +66,11 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("PROMPT_COACH_CODEX_DIR", str(tmp_path / "codex"))  # keep off /mnt/c
     monkeypatch.setenv("PROMPT_COACH_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("PROMPT_COACH_API_BASE", "http://127.0.0.1:9")  # nothing listens
+    # Isolates config.toml reads/writes from the real machine's
+    # ~/.config/prompt-coach/config.toml -- load_config() falls back to
+    # XDG_CONFIG_HOME when no explicit path is given, and `setup` writes
+    # there, so this must be redirected for every CLI test, not just setup's.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     return tmp_path
 
 
@@ -262,6 +267,67 @@ def test_stats_shows_no_llm_tag(env):
     result = runner.invoke(app, ["stats"])
     assert result.exit_code == 0
     assert "no LLM" in result.output
+
+
+def test_default_stores_filters_by_enabled(env, monkeypatch):
+    from prompt_coach.cli import default_stores
+    from prompt_coach.config import load_config
+
+    monkeypatch.setenv("PROMPT_COACH_ENABLED_STORES", "hermes,codex")
+    stores = default_stores(load_config())
+    assert {s.kind.value for s in stores} == {"hermes", "codex"}
+
+
+def test_setup_wizard_writes_config_and_respects_answers(env):
+    # hermes/claude-code have fixture data (default: enable); copilot/codex
+    # point at nonexistent dirs (default: disable). Accept every other
+    # default, decline the dir-override and both post-setup actions.
+    answers = "\n" * 8 + "n\nn\nn\n"
+    result = runner.invoke(app, ["setup"], input=answers)
+    assert result.exit_code == 0, result.output
+
+    config_path = env / "xdg-config" / "prompt-coach" / "config.toml"
+    assert config_path.is_file()
+    written = config_path.read_text()
+    assert 'enabled = ["claude-code", "hermes"]' in written
+    assert "not reachable" in result.output  # PROMPT_COACH_API_BASE is unreachable in tests
+
+
+def test_setup_wizard_can_disable_a_normally_available_store(env):
+    # Decline claude-code specifically (its default is "enable"); accept
+    # every other default.
+    answers = "\nn\n\n\n\n\n\n\nn\nn\nn\n"
+    result = runner.invoke(app, ["setup"], input=answers)
+    assert result.exit_code == 0, result.output
+
+    config_path = env / "xdg-config" / "prompt-coach" / "config.toml"
+    written = config_path.read_text()
+    assert 'enabled = ["hermes"]' in written
+
+
+def test_setup_wizard_rejects_public_url_without_crashing(env):
+    # Position 5 (base URL) gets a public URL instead of accepting the
+    # default -- RemoteEndpointRefused must be caught, not propagate.
+    answers = "\n\n\n\nhttps://api.openai.com/v1\n\n\n\nn\nn\nn\n"
+    result = runner.invoke(app, ["setup"], input=answers)
+    assert result.exit_code == 0, result.output
+    assert "refused" in result.output
+    assert "not reachable" in result.output
+
+    config_path = env / "xdg-config" / "prompt-coach" / "config.toml"
+    written = config_path.read_text()
+    assert 'api_base = "https://api.openai.com/v1"' in written  # saved as typed, even if rejected
+
+
+def test_setup_wizard_dir_override_written(env):
+    answers = "\n" * 8 + "y\noff\nn\nn\n"
+    result = runner.invoke(app, ["setup"], input=answers)
+    assert result.exit_code == 0, result.output
+
+    config_path = env / "xdg-config" / "prompt-coach" / "config.toml"
+    written = config_path.read_text()
+    assert "[nudge.dir_overrides]" in written
+    assert '"off"' in written
 
 
 def test_dash_no_sync_skips_sync(env, monkeypatch):

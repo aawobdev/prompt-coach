@@ -6,23 +6,26 @@ import re
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 
-from prompt_coach.analysis.metrics import compute_metrics
-from prompt_coach.analysis.patterns import detect_patterns
-from prompt_coach.analysis.rubric import run_rubric
 from prompt_coach.cache import CacheDB
 from prompt_coach.config import Config, load_config
-from prompt_coach.llm.client import LLMUnavailable, LocalLLM, RemoteEndpointRefused
 from prompt_coach.models import ReportData
-from prompt_coach.report.generator import build_report
-from prompt_coach.stores.chatgpt_export import ChatGPTExportStore, looks_like_chatgpt_export
-from prompt_coach.stores.claude_code import ClaudeCodeStore
-from prompt_coach.stores.codex_cli import CodexStore
-from prompt_coach.stores.copilot import CopilotStore
-from prompt_coach.stores.hermes import HermesStore
-from prompt_coach.stores.json_import import JsonImportStore
+
+if TYPE_CHECKING:  # never imported at runtime -- see the note below
+    from prompt_coach.llm.client import LocalLLM
+
+# Everything else (analysis/*, llm.client, report.generator, stores/*) is
+# imported lazily inside the commands/helpers that use it, not here.
+# `nudge` runs synchronously on every Claude Code prompt submission (see
+# nudge.py's docstring), so cli.py being import-heavy at module scope was a
+# real, measured cost: typer must import this whole file to dispatch any
+# single command, so `nudge` paid for report/rubric/pattern/store imports
+# it never touches -- dominated by the `openai` SDK's own type surface
+# (~700-900ms just for `import openai`, see DECISIONS.md 2026-07-29).
+# CacheDB/Config/models stay eager: stdlib-only, no measurable cost.
 
 app = typer.Typer(
     name="prompt-coach",
@@ -71,12 +74,20 @@ def _empty_state(cache: CacheDB, since_dt: datetime | None, label: str) -> tuple
 
 
 def default_stores(cfg: Config) -> list:
-    return [
+    from prompt_coach.stores.claude_code import ClaudeCodeStore
+    from prompt_coach.stores.codex_cli import CodexStore
+    from prompt_coach.stores.copilot import CopilotStore
+    from prompt_coach.stores.hermes import HermesStore
+
+    candidates = [
         HermesStore(cfg.stores.hermes_db),
         ClaudeCodeStore(cfg.stores.claude_projects_dir),
         CopilotStore(cfg.stores.copilot_dir),
         CodexStore(cfg.stores.codex_dir),
     ]
+    # Opt-in: a store present on disk is only used if named in cfg.stores.enabled
+    # (DECISIONS.md 2026-07-29).
+    return [s for s in candidates if s.kind.value in cfg.stores.enabled]
 
 
 def open_cache(cfg: Config) -> CacheDB:
@@ -117,6 +128,8 @@ def sync_with_progress(cache: CacheDB, cfg: Config, *, force: bool = False):
 
 def make_llm(cfg: Config) -> LocalLLM | None:
     """LocalLLM when the endpoint is reachable, else None (degraded mode)."""
+    from prompt_coach.llm.client import LocalLLM, RemoteEndpointRefused
+
     try:
         llm = LocalLLM(
             cfg.llm.base_url,
@@ -150,6 +163,115 @@ def discover():
 
 
 @app.command()
+def setup():
+    """Interactive setup wizard: choose which stores are active, set the LLM
+    endpoint/model, nudge mode, model-fit mode, and optionally a per-directory
+    nudge override -- writes ~/.config/prompt-coach/config.toml. Ends by
+    offering to run a report or open the dashboard."""
+    from prompt_coach.config import (
+        MODEL_FIT_MODES,
+        NUDGE_MODES,
+        Config,
+        LLMConfig,
+        ModelFitConfig,
+        NudgeConfig,
+        StoresConfig,
+        config_file_path,
+        write_config,
+    )
+    from prompt_coach.llm.client import LocalLLM, RemoteEndpointRefused
+    from prompt_coach.stores.claude_code import ClaudeCodeStore
+    from prompt_coach.stores.codex_cli import CodexStore
+    from prompt_coach.stores.copilot import CopilotStore
+    from prompt_coach.stores.hermes import HermesStore
+
+    cfg = load_config()
+    typer.echo("prompt-coach setup\n")
+
+    typer.echo("Which stores should be active?")
+    stores_by_kind = {
+        "hermes": HermesStore(cfg.stores.hermes_db),
+        "claude-code": ClaudeCodeStore(cfg.stores.claude_projects_dir),
+        "copilot": CopilotStore(cfg.stores.copilot_dir),
+        "codex": CodexStore(cfg.stores.codex_dir),
+    }
+    enabled: set[str] = set()
+    for kind, store in stores_by_kind.items():
+        info = store.discover()
+        was_enabled = kind in cfg.stores.enabled
+        if info.available:
+            detail = f"found, {info.session_count} sessions" if info.session_count else "found"
+        else:
+            detail = f"not found ({info.detail})"
+        if typer.confirm(f"  {kind} -- {detail}. Enable?", default=info.available and was_enabled):
+            enabled.add(kind)
+
+    typer.echo("\nLLM endpoint (local-only; a public URL needs allow_remote set by hand):")
+    base_url = typer.prompt("  base URL", default=cfg.llm.base_url)
+    model = typer.prompt("  model", default=cfg.llm.model)
+    try:
+        probe = LocalLLM(
+            base_url, model, api_key=cfg.llm.api_key, timeout=2.0, allow_remote=cfg.llm.allow_remote
+        )
+        reachable = probe.available()
+    except RemoteEndpointRefused as exc:
+        typer.echo(f"  refused: {exc}", err=True)
+        reachable = False
+    typer.echo(f"  -> {'reachable now' if reachable else 'not reachable right now'}")
+
+    nudge_mode = typer.prompt(f"\nNudge mode ({'/'.join(NUDGE_MODES)})", default=cfg.nudge.mode)
+    while nudge_mode not in NUDGE_MODES:
+        typer.echo(f"  must be one of {NUDGE_MODES}", err=True)
+        nudge_mode = typer.prompt("Nudge mode", default=cfg.nudge.mode)
+
+    model_fit_mode = typer.prompt(
+        f"Model-fit mode ({'/'.join(MODEL_FIT_MODES)})", default=cfg.model_fit.mode
+    )
+    while model_fit_mode not in MODEL_FIT_MODES:
+        typer.echo(f"  must be one of {MODEL_FIT_MODES}", err=True)
+        model_fit_mode = typer.prompt("Model-fit mode", default=cfg.model_fit.mode)
+
+    dir_overrides = dict(cfg.nudge.dir_overrides)
+    here = str(Path.cwd())
+    if typer.confirm(f"\nOverride nudge mode just for this directory ({here})?", default=False):
+        override_mode = typer.prompt(f"  nudge mode for {here}", default=nudge_mode)
+        while override_mode not in NUDGE_MODES:
+            typer.echo(f"  must be one of {NUDGE_MODES}", err=True)
+            override_mode = typer.prompt("  nudge mode", default=nudge_mode)
+        dir_overrides[here] = override_mode
+
+    new_cfg = Config(
+        llm=LLMConfig(
+            base_url=base_url,
+            model=model,
+            api_key=cfg.llm.api_key,
+            allow_remote=cfg.llm.allow_remote,
+            timeout=cfg.llm.timeout,
+        ),
+        stores=StoresConfig(
+            hermes_db=cfg.stores.hermes_db,
+            claude_projects_dir=cfg.stores.claude_projects_dir,
+            copilot_dir=cfg.stores.copilot_dir,
+            codex_dir=cfg.stores.codex_dir,
+            enabled=frozenset(enabled),
+        ),
+        nudge=NudgeConfig(
+            mode=nudge_mode, llm_timeout=cfg.nudge.llm_timeout, dir_overrides=dir_overrides
+        ),
+        model_fit=ModelFitConfig(mode=model_fit_mode),
+        cache_dir=cfg.cache_dir,
+    )
+    path = config_file_path()
+    write_config(new_cfg, path)
+    typer.echo(f"\nSaved to {path}")
+
+    if typer.confirm("\nRun a report now?", default=True):
+        report(since=None, limit=None, sample=150, no_llm=False, refresh=False, out=None)
+    elif typer.confirm("Open the dashboard instead?", default=False):
+        dash(since="12w", plain=False, no_sync=False)
+
+
+@app.command()
 def stats(
     since: str | None = typer.Option(None, "--since", help="Time range (e.g. 7d, 30d)"),
     plain: bool = typer.Option(False, "--plain", help="Force plain text output"),
@@ -158,6 +280,8 @@ def stats(
     from rich.console import Console
     from rich.table import Table
     from rich.text import Text
+
+    from prompt_coach.analysis.metrics import compute_metrics
 
     cfg = load_config()
     cache = open_cache(cfg)
@@ -212,6 +336,14 @@ def report(
     out: Path | None = typer.Option(None, "--out", "-o", help="Write report to file"),
 ):
     """Generate a coaching report from your prompt history."""
+    from prompt_coach.analysis.metrics import compute_metrics
+    from prompt_coach.analysis.model_fit import detect_mismatches
+    from prompt_coach.analysis.patterns import detect_patterns
+    from prompt_coach.analysis.rubric import run_rubric
+    from prompt_coach.llm.client import LLMUnavailable
+    from prompt_coach.report.generator import build_report
+    from prompt_coach.stores.hermes import HermesStore
+
     cfg = load_config()
     cache = open_cache(cfg)
     stats_ = sync_with_progress(cache, cfg, force=refresh)
@@ -251,6 +383,7 @@ def report(
         llm_available=llm is not None,
         llm_model=cfg.llm.model if llm is not None else None,
         session_titles=tuple(HermesStore(cfg.stores.hermes_db).session_titles(since_dt)[:30]),
+        model_fit=detect_mismatches(prompts, cfg.model_fit.mode),
     )
     text = build_report(data)
     if out:
@@ -273,6 +406,9 @@ def dash(
     from rich.text import Text
 
     from prompt_coach.analysis.docs import analyse_docs
+    from prompt_coach.analysis.metrics import compute_metrics
+    from prompt_coach.analysis.model_fit import detect_mismatches
+    from prompt_coach.analysis.rubric import run_rubric
     from prompt_coach.report.dash import build_dash, weekly_volumes
 
     cfg = load_config()
@@ -304,6 +440,7 @@ def dash(
         store_count=len(store_counts),
         stale_count=len(stores_failed),
         docs=analyse_docs(prompts),
+        model_fit=detect_mismatches(prompts, cfg.model_fit.mode),
         width=console.size.width,
         plain=plain,
     )
@@ -329,6 +466,9 @@ def import_(
 ):
     """Import external session data into the cache (format auto-detected)."""
     import json as _json
+
+    from prompt_coach.stores.chatgpt_export import ChatGPTExportStore, looks_like_chatgpt_export
+    from prompt_coach.stores.json_import import JsonImportStore
 
     cfg = load_config()
     store: ChatGPTExportStore | JsonImportStore
@@ -395,9 +535,11 @@ def cache_clear(
 
 @app.command()
 def nudge():
-    """Claude Code hook for both UserPromptSubmit and Stop: prints a
-    hook-response JSON to stdout. Mode ("coach"/"always"/"off") comes from
-    config -- see nudge.py's module docstring. No store sync. In "coach"/
+    """Hook target for Claude Code (UserPromptSubmit + Stop) and Hermes
+    (pre_llm_call shell hook, tip-only -- see nudge.py's module docstring):
+    prints a hook-response JSON to stdout, dispatching on the payload's
+    hook_event_name. Mode ("coach"/"always"/"off") comes from config -- see
+    nudge.py's module docstring. No store sync. In Claude Code's "coach"/
     "always" mode this may call the local LLM (bounded by its own short
     timeout, not the 120s default) and block the prompt; must never raise --
     a hook failure would block every prompt or response."""

@@ -20,13 +20,16 @@ def kind0(requests=()):
     )
 
 
-def request(rid, text, ts=1779045221231):
-    return {
+def request(rid, text, ts=1779045221231, model_id=None):
+    req = {
         "requestId": rid,
         "timestamp": ts,
         "message": {"text": text, "parts": [{"text": text, "kind": "text"}]},
         "agent": {"extensionId": {"value": "GitHub.copilot-chat"}},
     }
+    if model_id is not None:
+        req["modelId"] = model_id
+    return req
 
 
 def kind2_append(*reqs):
@@ -78,6 +81,26 @@ def test_kind1_and_other_paths_ignored(tmp_path):
         ],
     )
     assert list(CopilotStore(tmp_path).iter_prompts()) == []
+
+
+def test_model_id_captured_per_request(tmp_path):
+    write_session(
+        tmp_path,
+        "s-6",
+        [
+            kind0([request("r0", "first", model_id="copilot/claude-haiku-4.5")]),
+            kind2_append(request("r1", "second", model_id="ollama/Ollama/devstral-24b:latest")),
+            kind2_append(request("r2", "auto-routed", model_id="copilot/auto")),
+            kind2_append(request("r3", "no model field set")),
+        ],
+    )
+    prompts = list(CopilotStore(tmp_path).iter_prompts())
+    assert [p.model for p in prompts] == [
+        "copilot/claude-haiku-4.5",
+        "ollama/Ollama/devstral-24b:latest",
+        "copilot/auto",
+        None,
+    ]
 
 
 def test_empty_message_skipped(tmp_path):

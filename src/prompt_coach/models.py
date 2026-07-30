@@ -60,6 +60,7 @@ class Prompt:
     origin: PromptOrigin
     cwd: str | None = None
     git_repo: str | None = None
+    model: str | None = None  # the model that handled this turn, when the store can tell
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,30 @@ class DocQualitySummary:
 
 
 @dataclass(frozen=True)
+class ModelFitFinding:
+    """One prompt where what it demanded and the model that handled it look
+    mismatched. No prompt content -- source/model/tiers/direction only, same
+    privacy rule as DocFinding."""
+
+    prompt_ref: str  # "source:session_id:message_ref"
+    source: SourceKind
+    model: str
+    demand_tier: str  # "low" | "medium" | "high"
+    model_tier: str  # "small" | "medium" | "large"
+    direction: str  # "underpowered" | "overpowered"
+    suggestion: str | None = None  # only populated in "prescriptive" mode
+
+
+@dataclass(frozen=True)
+class ModelFitSummary:
+    mode: str  # "off" | "descriptive" | "prescriptive"
+    findings: tuple[ModelFitFinding, ...]
+    eligible: int  # human, non-micro-reply prompts considered
+    coverage: int  # of eligible, how many had a classifiable model tier
+    models_seen: dict[str, tuple[str, ...]]  # source.value -> distinct models observed
+
+
+@dataclass(frozen=True)
 class ReportData:
     generated_at: datetime
     since: datetime | None
@@ -186,3 +211,4 @@ class ReportData:
     llm_available: bool
     llm_model: str | None
     session_titles: tuple[tuple[str, str], ...] = ()  # (date, title)
+    model_fit: ModelFitSummary | None = None  # None when mode is "off"

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS prompts (
     origin TEXT NOT NULL,
     cwd TEXT,
     git_repo TEXT,
+    model TEXT,
     PRIMARY KEY (source, session_id, message_ref)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_prompts_fork_dedupe
@@ -66,6 +67,17 @@ class CacheDB:
             os.chmod(self.path, 0o600)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
+        self._ensure_model_column()
+
+    def _ensure_model_column(self) -> None:
+        """CREATE TABLE IF NOT EXISTS above never alters an existing table,
+        so a cache.db from before the `model` column existed needs an
+        explicit migration -- the cache is disposable (rm -rf resets it),
+        but there's no reason to force that just for this."""
+        cols = {row["name"] for row in self.conn.execute("PRAGMA table_info(prompts)")}
+        if "model" not in cols:
+            self.conn.execute("ALTER TABLE prompts ADD COLUMN model TEXT")
+            self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -105,7 +117,7 @@ class CacheDB:
     def _insert(self, p: Prompt, stats: SyncStats) -> None:
         stats.scanned += 1
         cur = self.conn.execute(
-            "INSERT OR IGNORE INTO prompts VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO prompts VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 p.source.value,
                 p.session_id,
@@ -116,6 +128,7 @@ class CacheDB:
                 p.origin.value,
                 p.cwd,
                 p.git_repo,
+                p.model,
             ),
         )
         if cur.rowcount:
@@ -186,6 +199,7 @@ class CacheDB:
             origin=PromptOrigin(row["origin"]),
             cwd=row["cwd"],
             git_repo=row["git_repo"],
+            model=row["model"],
         )
 
     def prompts(

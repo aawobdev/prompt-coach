@@ -183,6 +183,37 @@ def test_claude_file_offset_resume(cache, tmp_path):
     assert cache.counts()["prompts"] == 2
 
 
+def test_model_round_trips_through_sync(cache):
+    store = FakeStore([make_prompt("a", "hello", model="claude-sonnet-5")])
+    cache.sync([store])
+    assert cache.prompts()[0].model == "claude-sonnet-5"
+
+
+def test_model_column_migrated_on_pre_existing_db(tmp_path):
+    path = tmp_path / "old.db"
+    import sqlite3 as _sqlite3
+
+    conn = _sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE prompts (
+            source TEXT NOT NULL, session_id TEXT NOT NULL, message_ref TEXT NOT NULL,
+            content TEXT NOT NULL, content_hash TEXT NOT NULL, timestamp REAL NOT NULL,
+            origin TEXT NOT NULL, cwd TEXT, git_repo TEXT,
+            PRIMARY KEY (source, session_id, message_ref)
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+    db = CacheDB(path)
+    try:
+        db.sync([FakeStore([make_prompt("a", "hello", model="claude-sonnet-5")])])
+        assert db.prompts()[0].model == "claude-sonnet-5"
+    finally:
+        db.close()
+
+
 def test_llm_cache_roundtrip(cache):
     assert cache.get_llm("k1") is None
     cache.put_llm("k1", {"answer": 42}, model="m", template_version="v1")

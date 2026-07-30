@@ -16,8 +16,10 @@ from pathlib import Path
 from prompt_coach.models import Prompt, SourceKind, StoreInfo
 from prompt_coach.stores.base import classify_origin, content_hash
 
+# s.model is session-level, not per-turn -- Hermes has no per-message model
+# column, unlike Claude Code/Codex where the model can change mid-session.
 _PROMPT_QUERY = """
-SELECT m.id, m.session_id, m.content, m.timestamp, s.cwd, s.git_repo_root
+SELECT m.id, m.session_id, m.content, m.timestamp, s.cwd, s.git_repo_root, s.model
 FROM messages m
 JOIN sessions s ON s.id = m.session_id
 WHERE m.role = 'user'
@@ -82,6 +84,7 @@ class HermesStore:
                     origin=classify_origin(content),
                     cwd=row["cwd"],
                     git_repo=row["git_repo_root"],
+                    model=row["model"],
                 )
 
     def session_titles(self, since: datetime | None = None) -> list[tuple[str, str]]:

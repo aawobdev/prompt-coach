@@ -1094,3 +1094,50 @@ T38 after T35+T37; T39 anytime; T40 last.
 - Verify: `uv run pytest tests/test_stores_codex.py -q`; live `discover`
   and `cache sync` against the real session file, confirming clean
   extracted content (no IDE-wrapper noise).
+
+---
+
+### 17. PHASE 3 (added 2026-07-29/30): model fit, nudge latency, setup wizard
+
+Three post-gate additions in one session, each with a full DECISIONS.md
+entry (trigger/decision/why/affects); this section records the resulting
+shape, not the reasoning (see DECISIONS.md for that).
+
+**17.1 Model fit** (`analysis/model_fit.py`, 2026-07-29): a new deterministic
+analysis dimension flagging prompts where what they demanded and the model
+that handled them look mismatched. `Prompt.model` is now captured by all
+four live stores (per-turn for Claude Code/Codex CLI, per-request for
+Copilot, session-level for Hermes -- no per-message model column exists
+there). `ModelFitConfig.mode` (off/descriptive/prescriptive, default
+descriptive) mirrors `NudgeConfig`. Surfaced in both `dash` and `report`.
+Known gap: the cache dedupes on insert, so prompts cached before this
+shipped never retroactively gain a `model` value -- a one-time `cache
+clear` backfills it.
+
+**17.2 Nudge latency fix** (cli.py/nudge.py import structure, 2026-07-29):
+`cli.py` imported the entire CLI (report/rubric/pattern analysis, all four
+stores) at module scope, and `nudge.py` imported the `openai` SDK
+unconditionally -- together costing every single prompt submission
+~1.3-1.5s regardless of nudge mode, dominated by `openai`'s own unused
+type surface (~700-900ms). Fixed via imports local to the commands/
+functions that actually need them (`TYPE_CHECKING`-guarded where only a
+type hint was needed). Measured ~3x improvement for the common case
+(mode=off/non-triggering). No behavior change, no new files.
+
+**17.3 Setup wizard + per-directory nudge + store enable/disable**
+(2026-07-29/30): `install.sh` (repo root) wraps `uv tool install .`
+mirroring Hermes's own setup shape, minus the manual venv/symlink work
+uv's tool-install mechanism already does. New `prompt-coach setup`
+command: per-store enable/disable (`StoresConfig.enabled`, opt-in, default
+all four -- section 4.6's `default_stores()` now filters on it), LLM
+endpoint/model with a live reachability check, nudge/model-fit modes, and
+an optional per-directory nudge override, then offers to run `report` or
+`dash` immediately. `NudgeConfig.dir_overrides` (config.toml-only, a path
+-> mode mapping) exists because Claude Code's own hook scopes merge
+rather than override -- there is no settings-file way to exclude one
+project from a globally-registered hook, confirmed against the live hooks
+docs, so `nudge.py` resolves the longest matching `cwd` prefix itself.
+`config.py` gained a hand-formatted TOML writer (`write_config`,
+round-trip-safe with `load_config`) rather than a new TOML-writing
+dependency. 231 tests total (up from 213): tests/test_config.py (new),
+test_nudge.py/test_cli.py extended.

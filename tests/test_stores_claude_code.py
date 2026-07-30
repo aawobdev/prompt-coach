@@ -79,6 +79,73 @@ def test_content_block_array_flattened():
     assert p.content == "first part\nsecond part"
 
 
+def assistant_line(parent_uuid, model, **overrides):
+    base = {
+        "type": "assistant",
+        "parentUuid": parent_uuid,
+        "message": {"role": "assistant", "model": model},
+        "uuid": "a-1",
+        "timestamp": "2026-06-22T21:39:41.000Z",
+        "sessionId": "sess-1",
+    }
+    base.update(overrides)
+    return json.dumps(base)
+
+
+def test_model_attached_from_matching_assistant_reply(tmp_path):
+    proj = tmp_path / "projects" / "-home-x-proj"
+    proj.mkdir(parents=True)
+    f = proj / "sess.jsonl"
+    f.write_text(line(uuid="u-1") + "\n" + assistant_line("u-1", "claude-sonnet-5") + "\n")
+    store = ClaudeCodeStore(tmp_path / "projects")
+    results = list(store.iter_file(f))
+    assert len(results) == 1
+    assert results[0][1].model == "claude-sonnet-5"
+
+
+def test_model_switch_mid_session_is_per_turn(tmp_path):
+    proj = tmp_path / "projects" / "-home-x-proj"
+    proj.mkdir(parents=True)
+    f = proj / "sess.jsonl"
+    f.write_text(
+        line(uuid="u-1")
+        + "\n"
+        + assistant_line("u-1", "claude-fable-5")
+        + "\n"
+        + line(uuid="u-2")
+        + "\n"
+        + assistant_line("u-2", "claude-opus-4-8")
+        + "\n"
+    )
+    store = ClaudeCodeStore(tmp_path / "projects")
+    results = [p for _, p in store.iter_file(f)]
+    assert [p.model for p in results] == ["claude-fable-5", "claude-opus-4-8"]
+
+
+def test_synthetic_model_placeholder_ignored(tmp_path):
+    proj = tmp_path / "projects" / "-home-x-proj"
+    proj.mkdir(parents=True)
+    f = proj / "sess.jsonl"
+    f.write_text(line(uuid="u-1") + "\n" + assistant_line("u-1", "<synthetic>") + "\n")
+    store = ClaudeCodeStore(tmp_path / "projects")
+    results = [p for _, p in store.iter_file(f)]
+    assert results[0].model is None
+
+
+def test_no_matching_assistant_reply_leaves_model_none(tmp_path):
+    proj = tmp_path / "projects" / "-home-x-proj"
+    proj.mkdir(parents=True)
+    f = proj / "sess.jsonl"
+    # assistant reply exists but points at a different parent -- e.g. a
+    # subagent/sidechain turn -- so it must not attach here.
+    f.write_text(
+        line(uuid="u-1") + "\n" + assistant_line("some-other-uuid", "claude-opus-4-8") + "\n"
+    )
+    store = ClaudeCodeStore(tmp_path / "projects")
+    results = [p for _, p in store.iter_file(f)]
+    assert results[0].model is None
+
+
 def test_malformed_line_skipped():
     assert parse_line("{not json") is None
     assert parse_line("") is None

@@ -75,6 +75,23 @@ Based on a stratified sample of {{ data.patterns.sample_size }} prompts.
 | {{ t.topic }} | {{ '%.0f%%'|format(t.share * 100) }} |
 {%- endfor %}
 {% endif %}
+{% if data.model_fit and data.model_fit.mode != 'off' %}
+## Model Fit
+
+{{ data.model_fit.coverage }}/{{ data.model_fit.eligible }} eligible prompts had a model attached and classifiable
+({{ data.model_fit.mode }} mode). "Available models" below is only ever what you've
+actually used with that store, never a hardcoded list.
+
+{% if not data.model_fit.findings -%}
+No mismatches found.
+{% else -%}
+| Source | Model | Direction |{% if data.model_fit.mode == 'prescriptive' %} Suggestion |{% endif %}
+|--------|-------|-----------|{% if data.model_fit.mode == 'prescriptive' %}------------|{% endif %}
+{%- for f in data.model_fit.findings %}
+| {{ f.source.value }} | {{ f.model }} | {{ f.direction }} |{% if data.model_fit.mode == 'prescriptive' %} {{ f.suggestion or '-' }} |{% endif %}
+{%- endfor %}
+{% endif %}
+{% endif %}
 {% if data.session_titles %}
 ## Sessions This Period
 

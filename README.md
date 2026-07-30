@@ -12,6 +12,16 @@ still works (deterministic analysis only) when no model is reachable.
 
 ## Quick start
 
+Install as a real command on PATH (via `uv tool install`) and configure it
+interactively:
+
+```bash
+./install.sh          # installs, then offers to run the setup wizard
+prompt-coach setup     # choose which stores are active, LLM endpoint, nudge mode
+```
+
+Or run straight from the repo without installing:
+
 ```bash
 uv sync
 uv run prompt-coach discover             # list session stores with counts
@@ -26,14 +36,43 @@ uv run prompt-coach import chatgpt-export.zip   # ChatGPT official data export
 
 | Command | Description |
 |---------|-------------|
+| `setup` | Interactive wizard: choose which stores are active, LLM endpoint/model, nudge mode, model-fit mode, and an optional per-directory nudge override. Writes `config.toml`, then offers to run `report` or `dash`. |
 | `discover` | Find available session stores (Hermes, Claude Code, Copilot, Codex CLI) |
 | `report` | Coaching report: metrics, rubric scorecard, insights (`--since`, `--sample`, `--no-llm`, `--out`) |
 | `dash` | Terminal dashboard: volume sparklines, segments, scorecard, project-doc quality (`--plain` for non-TTY, `--no-sync` to skip the store sync and render from cache as-is) |
 | `stats` | Quick metrics table, no LLM needed |
 | `query` | Natural-language question over your prompt history, with citations |
-| `nudge` | Claude Code hook (`UserPromptSubmit` + `Stop`). Default `coach` mode: blocks weak prompts with an LLM-rewritten suggestion (degrades to a one-line tip if the LLM is unreachable), once per session. `always` mode blocks and rewrites every prompt; `off` disables it. Set via `PROMPT_COACH_NUDGE_MODE` or `[nudge] mode` in config.toml. Not meant to be run by hand. |
+| `nudge` | Hook target for Claude Code (`UserPromptSubmit` + `Stop`) and Hermes (`pre_llm_call`). On Claude Code, default `coach` mode blocks weak prompts with an LLM-rewritten suggestion (degrades to a one-line tip if the LLM is unreachable), once per session; `always` mode blocks and rewrites every prompt; `off` disables it. On Hermes, `pre_llm_call` can only inject context, not block, so it's always tip-only regardless of mode (`always` collapses to `coach`'s behavior there). Set via `PROMPT_COACH_NUDGE_MODE` or `[nudge] mode` in config.toml. Not meant to be run by hand. |
 | `import` | Import a ChatGPT export (ZIP/JSON) or simple JSON sessions; format auto-detected |
 | `cache sync/info/clear` | Manage the local analysis cache |
+
+## Claude Code slash command
+
+`~/.claude/commands/prompt-coach.md` (global, any project) runs
+`/prompt-coach report --since 7d`, `/prompt-coach dash --plain`, etc. -- any
+`prompt-coach` subcommand, passed straight through. Not part of this repo
+(it's Claude Code user config), but worth knowing it exists.
+
+## Wiring `nudge` into Hermes
+
+Hermes's own hooks docs describe `pre_llm_call` as the direct equivalent of
+Claude Code's `UserPromptSubmit`, and its shell hooks speak the same JSON
+wire protocol. Add to `~/.hermes/config.yaml`:
+
+```yaml
+hooks:
+  pre_llm_call:
+    - command: "prompt-coach nudge"
+      timeout: 5
+```
+
+Hermes prompts for one-time consent the first time the hook actually fires
+(persisted to `~/.hermes/shell-hooks-allowlist.json`); non-interactive runs
+(gateway, cron) need `--accept-hooks`, `HERMES_ACCEPT_HOOKS=1`, or
+`hooks_auto_accept: true` set first, or the hook silently stays unregistered.
+Unlike Claude Code, `pre_llm_call` can only inject context, never block, so
+this path is always the deterministic tip (never an LLM-rewrite-and-block) --
+see the `nudge` row above.
 
 ## How it works
 
@@ -56,12 +95,19 @@ No cloud API keys, no telemetry, no egress.
 
 ## Configuration
 
-`~/.config/prompt-coach/config.toml` (all optional), or env vars:
+`~/.config/prompt-coach/config.toml` (all optional; `prompt-coach setup` writes
+this for you), or env vars:
 
 - `PROMPT_COACH_API_BASE` - local LLM endpoint (default `http://192.168.1.123:11434/v1`)
 - `PROMPT_COACH_MODEL` - analysis model (default `qwen3-coder-30b:latest`, 32k num_ctx baked in)
 - `PROMPT_COACH_HERMES_DB`, `PROMPT_COACH_CLAUDE_PROJECTS`, `PROMPT_COACH_COPILOT_DIR`,
   `PROMPT_COACH_CODEX_DIR`, `PROMPT_COACH_CACHE_DIR`
+- `PROMPT_COACH_ENABLED_STORES` - comma-separated store list (default: all four
+  live stores). Opt-in, not opt-out: a store present on disk is only used if
+  named here. Equivalent to `[stores] enabled = [...]` in config.toml.
+- `[nudge.dir_overrides]` in config.toml only (a mapping has no clean env-var
+  form) - per-directory nudge mode, e.g. `"/home/x/scratch" = "off"`. The
+  longest matching path prefix wins; falls back to the global `nudge.mode`.
 
 ## Docs
 

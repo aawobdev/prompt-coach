@@ -430,3 +430,296 @@ CLI tests).
 **Decided by**: Alistair ("Block it but there should be an option... that
 just blanketly improves every single prompt", "Call the local LLM"),
 2026-07-27.
+
+## 2026-07-29 - New analysis dimension: model fit (scope + surface decided, not yet built)
+
+**Trigger**: Alistair proposed scoring how well each prompt fits the model
+that handled it, calibrated against whichever models are actually
+available to the user, not a hardcoded catalog. Spiked before designing:
+confirmed a model field exists in every store, but at different
+granularity. Hermes and Codex CLI capture it at session level
+(`sessions.model`; Codex's `gpt-5-codex` seen in the one live session).
+Claude Code captures it per turn, and sessions genuinely mix models: live
+transcripts show `claude-fable-5`/`claude-opus-4-8`/`claude-sonnet-5`
+within one conversation, plus a non-model `<synthetic>` placeholder value
+that must be excluded. Copilot carries `selectedModel.identifier` per
+request (`copilot/claude-haiku-4.5`, `ollama/Ollama/devstral-24b:latest`),
+including a `copilot/auto` value where Copilot chose the model itself and
+no single model can be attributed to that turn.
+**Decision**: (1) "Available models for the user" is derived, never
+configured: empirically, from distinct models already observed in the
+user's own history per store, which generalizes to 2 models or 20,
+local-only or mixed, with nothing to hand-maintain; for Ollama-style
+endpoints this is supplemented by querying the live models list
+`LocalLLM.available()` already hits against `GET {base}/models`, so
+installed-but-unused local models are visible too. Claude Code, Copilot,
+and Codex have no discovery endpoint, so those stay empirical-only. (2)
+Model fit gets both a descriptive mode (flag a mismatch only) and a
+prescriptive mode (suggest a specific better-fit model from the user's own
+observed/installed set), user-selectable, mirroring nudge's existing
+coach/always/off mode pattern (`NudgeConfig`) rather than picking one
+behavior for everyone. (3) Surface is report/dash first: retrospective,
+over the sampled corpus, reusing the existing rubric/patterns sampling
+infra (150-300 prompts) with no new per-prompt LLM cost; a live
+nudge-time check is an explicit later phase, not built now. (4) Per-turn
+granularity is required for Claude Code and Copilot, not per-session,
+since the model can change mid-conversation; confirm whether Codex CLI is
+truly session-only before assuming it needs no per-turn handling.
+**Why**: avoids two failure modes already on record in this file:
+inventing a static model list (same "confident invention" pattern as the
+2026-07-20 blueprint correction and the 2026-07-22 docs.py redirect-stub
+catch) and adding unsampled bulk-LLM cost (the same B7 rule already
+governing rubric/patterns). Mirroring nudge's mode pattern instead of
+inventing a new config shape keeps the config surface consistent across
+features.
+**Affects**: new analysis dimension, not yet built (no module or task
+numbers assigned yet); a config schema addition analogous to
+`NudgeConfig`; store readers may need per-turn model capture where not
+already present; a new report/dash panel; BLUEPRINT.md needs a new
+phase section once the deterministic "what does the prompt demand" signal
+set is designed.
+**Decided by**: Alistair (scope: "both but give the user a choice, like
+with the prompt improvement"; surface: "both, report first"), 2026-07-29.
+
+## 2026-07-29 - Model fit shipped: analysis/model_fit.py, wired into report + dash
+
+**Trigger**: the scope/surface decision above ("ship it").
+**Decision**: built per the decision entry: `Prompt.model` added (all four
+live stores capture it -- Hermes session-level from `sessions.model`;
+Claude Code and Codex CLI per-turn via a pending/flush buffer, resolved
+from the assistant reply's `parentUuid` and the following `turn_context`
+line respectively, both confirmed live; Copilot per-request `modelId`,
+including the unattributable `copilot/auto` value). `cache.py`'s schema
+gained a `model` column with an `ALTER TABLE` migration guard for
+pre-existing cache.db files. `analysis/model_fit.py` is deterministic
+only: `classify_model_tier` uses Claude's public haiku/sonnet/opus naming
+plus a param-count regex for local models, returning None (unclassified,
+not guessed) for anything else, including `gpt-5-codex` and `claude-fable-5`
+-- no documented ladder exists for either, so neither is scored.
+`estimate_demand_tier` is a plain char-length bucket (first-guess
+thresholds, not calibrated). `ModelFitConfig.mode` (off/descriptive/
+prescriptive, default descriptive) mirrors `NudgeConfig`; prescriptive
+suggestions are scoped to the same store's own observed model set only
+(you can't act on a suggestion from a different harness). Wired into both
+`dash` (new panel, counts/tiers/direction only, no prompt content) and
+`report` (new Model Fit section) per the "report first" surface decision.
+213 tests passing (up from 186), ruff and black clean.
+**Live-smoke finding**: `discover` and a full `--refresh` sync ran clean
+against the real corpus (65 Hermes sessions, 87 Claude Code, 167 Copilot,
+1 Codex), but coverage came back at only 16/916 eligible prompts -- the
+cache dedupes inserts on `(source, session_id, message_ref)`, so prompts
+already cached from before this feature existed keep `model=NULL`
+forever; only prompts synced fresh after this change (or after a
+`cache clear` + resync) get a model attached. This is a one-time
+backfill gap, not a bug in the ongoing behavior, but it means the report/
+dash panels will under-report until either time passes or the cache is
+cleared once.
+**Why**: matches the decision entry's constraints exactly (empirical
+availability, no bulk LLM cost, per-turn where the store supports it,
+descriptive/prescriptive as a mode not a fork). The coverage gap was
+found by testing live against real data rather than assuming the schema
+change would apply retroactively -- the same discipline this project has
+applied at every prior gate.
+**Affects**: models.py (`Prompt.model`, `ModelFitFinding`,
+`ModelFitSummary`, `ReportData.model_fit`), config.py (`ModelFitConfig`),
+cache.py (schema + migration), all four store readers, new
+analysis/model_fit.py, report/dash.py, report/templates/report.md.j2,
+cli.py, tests (test_model_fit.py new; store/cache/nudge test fixtures
+updated for the new field).
+**Decided by**: Claude (Sonnet 5), implementing the 2026-07-29 scope
+decision per Alistair's "ship it", 2026-07-29.
+
+## 2026-07-29 - nudge hook latency: confirmed real, fixed via lazy imports
+
+**Trigger**: Alistair had disabled the nudge hook entirely (`~/.claude/
+settings.json` `hooks: {}`, confirmed by inspection), suspecting it was
+adding delay to every prompt. Tested live rather than assumed: timed real
+`prompt-coach nudge` invocations (exact `UserPromptSubmit` payload shape)
+across mode=off, non-triggering, triggering (LLM reachable/unreachable),
+and always mode, plus `python -X importtime` to isolate where the time
+actually went.
+**Decision**: the suspicion was correct, but the cause was not the LLM --
+`cli.py` imported the entire CLI surface (report generation, rubric/
+pattern analysis, all four store readers) at module scope, so typer
+dispatching to `nudge` alone paid for all of it; `nudge.py` separately
+imported `llm.client` at module scope, which imports the `openai` SDK's
+full type surface (Assistants/Threads/Batches/Evals APIs never used here)
+at a measured ~700-900ms. Every single prompt submission paid this
+regardless of mode or whether a trigger fired. Fixed by moving all
+command-specific imports in `cli.py` to be local to the functions that use
+them (mirroring the local-import pattern already used for `rich`/`query`/
+`nudge` imports there), and moving `nudge.py`'s `llm.client` import into
+`rewrite_prompt()`/`_make_llm()`, the only places it's actually used.
+Return-type annotations referencing the now-lazy `LocalLLM` are guarded
+under `if TYPE_CHECKING:` so ruff's F821 stays clean without paying the
+import cost (the annotations themselves are never evaluated at runtime,
+since `from __future__ import annotations` is already active everywhere
+in this codebase).
+**Measured effect**: mode=off / non-triggering (the common case for most
+prompts most sessions) dropped from ~1.3-1.5s to ~0.4-0.5s per prompt
+submission -- roughly 3x. The residual ~0.4-0.5s is `uv run` + typer/rich
+startup, inherent to shelling out to any Python CLI per hook invocation,
+not something this fix touches. Coach mode's first trigger of a session
+still costs ~2.8s warm (real local-model inference, not import overhead)
+or ~3.1s when the LLM is unreachable (bounded by `LocalLLM.available()`'s
+2s probe timeout) -- both by design, once per session, not a bug.
+**Why**: a hook that runs on every keystroke-adjacent prompt submission
+must be judged against that frequency; a ~1s constant tax regardless of
+whether nudge does anything that turn is exactly the "quiet but real" cost
+that erodes trust in a tool meant to be used daily. Root-caused with
+`python -X importtime` rather than guessing which import was slow.
+**Affects**: cli.py (import structure only, no behavior change), nudge.py
+(import structure only). 213 tests unchanged and passing, ruff/black
+clean. Hook is still NOT re-registered in `~/.claude/settings.json` --
+that's Alistair's call now that the cost is measured and fixed.
+**Decided by**: Claude (Sonnet 5), testing per Alistair's "run" on the
+2026-07-29 improved prompt, 2026-07-29.
+
+## 2026-07-29 - Setup experience: installer script + wizard, modelled on Hermes's actual CLI
+
+**Trigger**: Alistair wanted a "standalone binary/script" setup like the
+Hermes CLI, with per-store enable/disable and the ability to trigger
+reports from setup. Checked Hermes's actual setup live rather than
+guessing what "like Hermes" means: `~/.hermes/hermes-agent/setup-
+hermes.sh` creates a venv and symlinks a `hermes` wrapper into
+`~/.local/bin`; `hermes setup` is a separate interactive wizard
+subcommand; `hermes` itself is not a compiled binary either, just a bash
+wrapper around a venv entrypoint -- prompt-coach already has the
+equivalent via `uv tool install .` (BLUEPRINT.md 10b), it just lacks the
+friendly installer script and the wizard.
+**Decision**: (1) Standalone binary means an installer script only
+(`uv tool install --force .`, which already places `prompt-coach` on
+PATH via uv's own tool-install mechanism -- no manual symlinking needed,
+Hermes's script predates/doesn't rely on that), not a PyInstaller/Nuitka
+compiled executable. A compiled binary is explicitly deferred, to revisit
+only if nudge-hook latency (see the entry above) is still a problem after
+today's import fix -- it would plausibly help further (no `uv run`
+resolve, no cold Python start) but costs a new build pipeline and a
+bigger artifact. (2) `prompt-coach setup` (new subcommand) ends by
+offering to immediately run `report` or `dash`, chaining into an action
+like Hermes's own setup does, rather than exiting silently after writing
+config. (3) Store selection is a new opt-in `enabled` list in
+`StoresConfig` (default: all four, preserving today's implicit
+"everything present is used" behavior for existing users) rather than an
+opt-out list -- consistent with the product's core privacy stance of
+deliberate inclusion, and means a future fifth store never silently
+turns itself on. (4) The wizard uses plain `typer.confirm`/`typer.prompt`
+(already available via the existing typer/rich dependencies), not a new
+checklist library -- matches the "small lift, no new deps" spirit of
+decision (1).
+**Why**: matching Hermes's actual, verified setup shape rather than an
+assumed one avoids inventing a UX that diverges from the CLI Alistair
+already knows and referenced. Deferring the compiled-binary path keeps
+today's scope to what was actually asked for and decided, with a
+concrete, measured reason to revisit (not a vague "maybe later").
+**Affects**: new `install.sh` at repo root; new `setup` command in
+cli.py; `config.py` `StoresConfig` gains `enabled` (env
+`PROMPT_COACH_ENABLED_STORES`, toml `[stores] enabled`); `default_stores()`
+in cli.py filters on it; README.md quick-start section; BLUEPRINT.md new
+phase section. Not yet built -- see the task list this session.
+**Decided by**: Alistair (binary scope: "installer script only"; wizard
+scope: "wizard chains into an action"), remaining implementation details
+by Claude (Sonnet 5) per existing project conventions, 2026-07-29.
+
+## 2026-07-30 - Per-directory nudge override folded into the setup scope
+
+**Trigger**: Alistair asked whether nudge could be enabled/disabled per
+session or per directory. Checked Claude Code's hooks docs live rather
+than assuming: hooks registered at different scopes (global `~/.claude/
+settings.json` vs project-level `.claude/settings.json`) merge/accumulate
+rather than override, so a project-level settings file cannot cancel a
+globally-registered hook -- there is no config-file mechanism to exclude
+one project from a global hook. Session-scoped hook control does not
+exist at all (no env var, no per-invocation toggle; `UserPromptSubmit`/
+`Stop` don't support `matcher` patterns either, confirmed silently
+ignored if set). What does exist: both events' payloads include `cwd`.
+**Decision**: implement per-directory control inside prompt-coach itself
+rather than relying on Claude Code's settings hierarchy, since the
+hierarchy can't do it. `NudgeConfig` gains `dir_overrides: dict[str,
+str]` (path -> off/coach/always), config.toml-only (`[nudge.
+dir_overrides]`, no env var -- it's a mapping, not a scalar, and env vars
+don't have a clean way to express one). `nudge.py` resolves the
+longest-matching path prefix from the hook's `cwd` before falling back to
+`cfg.nudge.mode`. Session-level control is explicitly not built: Claude
+Code gives no hook into session identity before a hook fires, and
+directory is the closest stable, available proxy. The setup wizard
+(2026-07-29 entry) gets one extra optional step -- override nudge for the
+directory `setup` is being run from -- rather than a full multi-directory
+management UI, keeping the wizard focused per that entry's own scope
+line.
+**Why**: matches this project's standing practice of checking the actual
+platform capability before designing around it (same discipline as the
+Stop-hook and block-and-rewrite entries on 2026-07-27) -- Alistair's ask
+assumed Claude Code might already support this, and it doesn't, so the
+real design question was "where does this belong," not "how do we
+configure the built-in version."
+**Affects**: config.py (`NudgeConfig.dir_overrides`), nudge.py
+(`build_response`'s mode resolution), the setup wizard's scope (one more
+optional step), tests. Folded into the not-yet-built task list from the
+2026-07-29 entry, not a separate build.
+**Decided by**: Alistair ("yes" to folding it into the scoped work),
+2026-07-30.
+
+## 2026-07-30 - Claude Code slash command + Hermes nudge equivalent
+
+**Trigger**: Alistair asked for a Claude Code slash command to invoke
+prompt-coach for reporting, then asked to check the same for Copilot and
+Hermes. Checked each platform's actual current docs rather than assuming
+parity across them:
+- Claude Code: `.claude/commands/*.md` still works identically to the
+  newer `.claude/skills/` format (custom commands were merged into
+  skills, old files keep working); `` !`command` `` syntax injects real
+  command output into context before Claude responds; `allowed-tools`
+  pre-approves it.
+- Hermes: its own hooks docs explicitly describe `pre_llm_call` as "the
+  UserPromptSubmit equivalent" and its shell hooks accept Claude Code's
+  JSON response shapes directly -- a close, documented parallel, not an
+  invented one. But `pre_llm_call` can only return `{"context": ...}`; it
+  cannot block, so there is no equivalent of Claude Code's block-and-
+  rewrite flow available on Hermes at all.
+- Copilot Chat: checked the official VS Code docs directly (a subagent's
+  first pass cited mostly third-party blog posts, so this one was
+  re-verified against code.visualstudio.com itself). Prompt files
+  (`.github/prompts/*.prompt.md`) exist but cannot embed shell command
+  execution -- confirmed, no `!command` equivalent. A true `/prompt-coach`
+  there needs a full VS Code extension (Chat Participant API), not a
+  markdown file.
+- Codex CLI: not installed as a standalone binary on this machine (VS
+  Code extension only, per BLUEPRINT.md 16.4a), so it inherits Copilot's
+  constraints -- no separate CLI-level command surface exists to target.
+**Decision**: built the two that are actually comparable-effort. (1)
+`~/.claude/commands/prompt-coach.md` (global, outside this repo):
+`` !`prompt-coach $ARGUMENTS` `` with `allowed-tools: Bash(prompt-coach *)`,
+so `/prompt-coach report --since 7d` etc. just works from any project. (2)
+`nudge.py`'s `build_response` now dispatches on `hook_event_name`:
+`pre_llm_call` payloads (message at `extra.user_message`, not top-level
+`prompt`) get a new `_hermes_tip_response()` path -- same calibrated
+triggers and once-per-session gate as Claude Code's coach mode, but
+always tip-only via context injection, since there's nothing to block.
+"always" mode has no meaningful translation for a context-only hook, so
+it collapses to coach-style behavior rather than inventing a fake
+"unconditional" semantic. The same `prompt-coach nudge` command serves
+both platforms -- it was already harness-agnostic (just reads stdin JSON),
+so no new CLI command was needed. Copilot/Codex: left as "ask it directly
+in chat" -- both already have full tool-calling/terminal access, so
+nothing is actually blocked, there's just no slash-command shortcut
+available without a much bigger VS Code extension project, which wasn't
+asked for.
+**Bug found and fixed during live smoke testing**: `_TIP_SCOPE`'s text
+said "...before Claude starts", hardcoded to Claude Code even though this
+hook now also fires for Hermes sessions running arbitrary models.
+Genericized to "before the agent starts".
+**Why**: matches the "check the actual platform capability before
+designing around it" discipline already established for the earlier
+per-directory-nudge and setup-wizard decisions today -- the interesting
+finding wasn't "can we build this," it was "these three platforms are not
+equivalent, and pretending they are would mean either a broken Hermes
+integration (assuming block support that doesn't exist) or an
+over-promised Copilot one (assuming injection that doesn't exist)."
+**Affects**: nudge.py (`_hermes_tip_response`, `build_response` dispatch,
+`_TIP_SCOPE` wording), cli.py (`nudge` docstring), tests (test_nudge.py
+`TestHermesPreLlmCall`), README.md (Hermes wiring + slash command
+sections), `~/.claude/commands/prompt-coach.md` (new, outside this repo).
+240 tests total (up from 231), ruff/black clean.
+**Decided by**: Alistair ("build it" on the Hermes side; the Claude Code
+command was built directly after "YES"), 2026-07-30.

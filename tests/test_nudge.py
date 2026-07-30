@@ -2,13 +2,19 @@
 
 import json
 
-from prompt_coach.config import Config, LLMConfig, NudgeConfig, StoresConfig
-from prompt_coach.nudge import build_response, evaluate, hook_response_stop, should_nudge
+from prompt_coach.config import Config, LLMConfig, ModelFitConfig, NudgeConfig, StoresConfig
+from prompt_coach.nudge import (
+    _resolve_mode,
+    build_response,
+    evaluate,
+    hook_response_stop,
+    should_nudge,
+)
 
 _UNREACHABLE = "http://127.0.0.1:9"  # nothing listens here -- deterministic "LLM down"
 
 
-def make_cfg(tmp_path, mode="coach", base_url=_UNREACHABLE):
+def make_cfg(tmp_path, mode="coach", base_url=_UNREACHABLE, dir_overrides=None):
     return Config(
         llm=LLMConfig(
             base_url=base_url, model="test-model", api_key="x", allow_remote=False, timeout=5.0
@@ -19,7 +25,8 @@ def make_cfg(tmp_path, mode="coach", base_url=_UNREACHABLE):
             copilot_dir=None,
             codex_dir=None,
         ),
-        nudge=NudgeConfig(mode=mode, llm_timeout=2.0),
+        nudge=NudgeConfig(mode=mode, llm_timeout=2.0, dir_overrides=dir_overrides or {}),
+        model_fit=ModelFitConfig(mode="descriptive"),
         cache_dir=tmp_path / "cache",
     )
 
@@ -241,3 +248,107 @@ class TestHookResponseStop:
         transcript.write_text(_user_line(LONG_WEAK) + "\n")
         assert evaluate(LONG_WEAK, "s1", cache_dir) is not None
         assert hook_response_stop("s1", transcript, cache_dir) == {}  # already nudged this session
+
+
+class TestResolveMode:
+    """Claude Code hooks merge across scopes rather than override (checked
+    live, DECISIONS.md 2026-07-30), so per-directory control lives here."""
+
+    def test_no_overrides_returns_global_mode(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach")
+        assert _resolve_mode(cfg, "/any/dir") == "coach"
+
+    def test_no_cwd_returns_global_mode(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach", dir_overrides={"/a": "off"})
+        assert _resolve_mode(cfg, None) == "coach"
+
+    def test_exact_match(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach", dir_overrides={"/a/b": "off"})
+        assert _resolve_mode(cfg, "/a/b") == "off"
+
+    def test_parent_prefix_matches_subdirectory(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach", dir_overrides={"/a/b": "off"})
+        assert _resolve_mode(cfg, "/a/b/sub/dir") == "off"
+
+    def test_sibling_directory_does_not_match(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach", dir_overrides={"/a/b": "off"})
+        assert _resolve_mode(cfg, "/a/bee") == "coach"  # prefix string, not a path segment
+
+    def test_longest_matching_prefix_wins(self, tmp_path):
+        cfg = make_cfg(
+            tmp_path,
+            mode="coach",
+            dir_overrides={"/a": "off", "/a/b": "always"},
+        )
+        assert _resolve_mode(cfg, "/a/b/sub") == "always"
+        assert _resolve_mode(cfg, "/a/other") == "off"
+
+    def test_trailing_slash_in_config_is_tolerated(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach", dir_overrides={"/a/b/": "off"})
+        assert _resolve_mode(cfg, "/a/b") == "off"
+        assert _resolve_mode(cfg, "/a/b/sub") == "off"
+
+
+class TestBuildResponseDirOverrides:
+    def test_off_override_suppresses_a_normally_triggering_prompt(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach", dir_overrides={"/p": "off"})
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1", "cwd": "/p"}, cfg)
+        assert resp == {}
+
+    def test_override_applies_only_inside_its_directory(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach", dir_overrides={"/p": "off"})
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1", "cwd": "/elsewhere"}, cfg)
+        assert resp != {}  # global "coach" mode still applies outside the override
+
+
+class TestHermesPreLlmCall:
+    """Hermes's pre_llm_call: same wire protocol Hermes documents as the
+    UserPromptSubmit equivalent, but message at extra.user_message and
+    context-injection only -- no block/rewrite capability exists there."""
+
+    def _payload(self, prompt, session_id="h1", cwd=None):
+        payload = {
+            "hook_event_name": "pre_llm_call",
+            "session_id": session_id,
+            "extra": {"user_message": prompt},
+        }
+        if cwd is not None:
+            payload["cwd"] = cwd
+        return payload
+
+    def test_triggering_prompt_returns_context_injection(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach")
+        resp = build_response(self._payload(LONG_WEAK), cfg)
+        assert "context" in resp
+        assert "decision" not in resp and "systemMessage" not in resp
+
+    def test_non_triggering_prompt_is_empty(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach")
+        assert build_response(self._payload(SHORT), cfg) == {}
+
+    def test_once_per_session_gate_applies(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach")
+        assert build_response(self._payload(LONG_WEAK, session_id="h2"), cfg) != {}
+        assert build_response(self._payload(LONG_WEAK, session_id="h2"), cfg) == {}
+
+    def test_off_mode_never_fires(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="off")
+        assert build_response(self._payload(LONG_WEAK), cfg) == {}
+
+    def test_always_mode_behaves_like_coach_not_unconditional(self, tmp_path):
+        # "always" has no meaningful translation for a context-injection-only
+        # hook (nothing to unconditionally block-and-rewrite), so it collapses
+        # to the same calibrated-trigger, once-per-session behavior as coach.
+        cfg = make_cfg(tmp_path, mode="always")
+        assert build_response(self._payload(SHORT), cfg) == {}
+        assert build_response(self._payload(LONG_WEAK, session_id="h3"), cfg) != {}
+
+    def test_missing_user_message_is_empty(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach")
+        payload = {"hook_event_name": "pre_llm_call", "session_id": "h4", "extra": {}}
+        assert build_response(payload, cfg) == {}
+
+    def test_dir_override_respected(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach", dir_overrides={"/proj": "off"})
+        resp = build_response(self._payload(LONG_WEAK, session_id="h5", cwd="/proj"), cfg)
+        assert resp == {}

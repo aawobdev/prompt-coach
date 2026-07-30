@@ -20,6 +20,7 @@ from rich.text import Text
 from prompt_coach.models import (
     LOW_N_THRESHOLD,
     DocQualitySummary,
+    ModelFitSummary,
     Prompt,
     RubricSummary,
     SegmentMetrics,
@@ -30,6 +31,7 @@ from prompt_coach.models import (
 _BLOCKS = " ▁▂▃▄▅▆▇█"
 _NARROW_WIDTH = 100  # below this, dash stacks panels full-width instead of side-by-side (D3)
 _MAX_VOLUME_ROWS = 3  # below _NARROW_WIDTH, collapse the rest into "+ N more…" (1a)
+_MAX_FIT_ROWS = 10  # model-fit findings table caps here, "+ N more" for the rest
 
 
 def sparkline(values: Sequence[int]) -> str:
@@ -103,6 +105,43 @@ def _docs_section(docs: DocQualitySummary) -> RenderableType:
     return Panel(table)
 
 
+def _model_fit_section(fit: ModelFitSummary) -> RenderableType:
+    """No prompt content here either -- source/model/tiers/direction/
+    suggestion only, same privacy rule as _docs_section."""
+    if fit.mode == "off":
+        return Text("model fit · off", style="dim")
+    if not fit.findings:
+        coverage_note = f"{fit.coverage}/{fit.eligible} prompts had a classifiable model"
+        return Text.assemble(
+            ("model fit · clean", "green"),
+            (f" -- 0 mismatches ({coverage_note})", "dim"),
+        )
+    shown, rest = fit.findings[:_MAX_FIT_ROWS], fit.findings[_MAX_FIT_ROWS:]
+    plural = "es" if len(fit.findings) != 1 else ""
+    table = Table(
+        title=Text.assemble(
+            (f"model fit · {len(fit.findings)} mismatch{plural}", "yellow"),
+            (f" ({fit.coverage}/{fit.eligible} classifiable)", "dim"),
+        ),
+        title_justify="left",
+        box=None,
+    )
+    table.add_column("Source", style="bold")
+    table.add_column("Model")
+    table.add_column("Direction")
+    if fit.mode == "prescriptive":
+        table.add_column("Suggestion")
+    for f in shown:
+        row = [f.source.value, f.model, f.direction]
+        if fit.mode == "prescriptive":
+            row.append(f.suggestion or "-")
+        table.add_row(*row)
+    if rest:
+        n_extra_cols = 3 if fit.mode == "prescriptive" else 2
+        table.add_row(f"+ {len(rest)} more…", *([""] * n_extra_cols), style="dim")
+    return Panel(table)
+
+
 def build_dash(
     *,
     metrics: StyleMetrics,
@@ -114,6 +153,7 @@ def build_dash(
     store_count: int | None = None,
     stale_count: int = 0,
     docs: DocQualitySummary | None = None,
+    model_fit: ModelFitSummary | None = None,
     width: int = 120,
     plain: bool = False,
 ) -> RenderableType:
@@ -202,4 +242,6 @@ def build_dash(
     parts: list[RenderableType] = [header, Text(), top, Panel(scorecard)]
     if docs is not None:
         parts.append(_docs_section(docs))
+    if model_fit is not None:
+        parts.append(_model_fit_section(model_fit))
     return Group(*parts)

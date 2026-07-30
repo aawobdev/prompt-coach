@@ -23,7 +23,7 @@ def state_db(tmp_path):
         """
         CREATE TABLE sessions (
             id TEXT PRIMARY KEY, source TEXT, started_at REAL, title TEXT,
-            cwd TEXT, git_repo_root TEXT
+            cwd TEXT, git_repo_root TEXT, model TEXT
         );
         CREATE TABLE messages (
             id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT,
@@ -32,10 +32,10 @@ def state_db(tmp_path):
         """
     )
     conn.executemany(
-        "INSERT INTO sessions VALUES (?,?,?,?,?,?)",
+        "INSERT INTO sessions VALUES (?,?,?,?,?,?,?)",
         [
-            ("s1", "cli", T0, "First session", "/home/x/proj", "/home/x/proj"),
-            ("s2", "cli", T0 + 3600, "Second session", None, None),
+            ("s1", "cli", T0, "First session", "/home/x/proj", "/home/x/proj", "qwen3-coder:30b"),
+            ("s2", "cli", T0 + 3600, "Second session", None, None, None),
         ],
     )
     conn.executemany(
@@ -78,6 +78,12 @@ def test_session_context_carried(state_db):
     p = next(HermesStore(state_db).iter_prompts())
     assert p.cwd == "/home/x/proj"
     assert p.session_id == "s1"
+
+
+def test_model_captured_session_level(state_db):
+    prompts = list(HermesStore(state_db).iter_prompts())
+    assert prompts[0].model == "qwen3-coder:30b"
+    assert prompts[1].model is None
 
 
 def test_since_filter(state_db):
