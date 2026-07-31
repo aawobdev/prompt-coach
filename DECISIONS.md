@@ -839,3 +839,24 @@ stats is cheap.
 **Affects**: nudge.py, cli.py, test_nudge.py, test_cli.py. 260 tests (up
 from 243).
 **Decided by**: Alistair (live feedback), built same session, 2026-07-31.
+
+## 2026-07-31 - _REWRITE_SYSTEM tuned against live output: context is background, not content
+
+**Trigger**: same-day follow-up to the grounded-rewrites build -- the first
+live grounded rewrite was a mini-spec that recited project-doc boilerplate
+(uv/ruff/black conventions, store paths) alongside the useful specifics.
+**Decision**: two additions to `_REWRITE_SYSTEM`, iterated against the
+real desktop Ollama rather than guessed: (1) "the context is background
+for YOU, not content for the rewrite: never recite, summarize, or restate
+the project docs or conventions -- the assistant reading the prompt
+already has them"; (2) a length anchor -- "about as long as a well-written
+version of the original ask (a few sentences), never a mini-spec".
+Verified on both trigger shapes: the long-unshaped prompt-coach ask
+dropped from ~9 sentences of doc recitation to 3 grounded sentences; a
+short-vague ask in email-client ("just redo the whole settings page")
+produced 3 sentences correctly citing that project's `design-pack/` and
+`BLUEPRINT.md` section 5. `_block_reason()` wording left as-is -- it reads
+fine around the tighter rewrites.
+**Affects**: nudge.py (`_REWRITE_SYSTEM` only, no logic change). 260
+tests unchanged. Binary reinstalled, smoke residue cleaned.
+**Decided by**: follow-through on the same-session pick-up item, 2026-07-31.

@@ -273,12 +273,14 @@ against the real backfilled data and found already well-calibrated - no
 changes made, the "no change needed" finding is recorded rather than
 silently assumed.
 
-1. **Partially resolved 2026-07-31**: the rewrite path has now run live
-   (Alistair hit it in the wild; grounded-context smoke against real
-   Ollama in this repo). Remaining: real grounded rewrites lean verbose -
-   they stuff in project-doc boilerplate alongside the useful specifics.
-   Tune `_REWRITE_SYSTEM` (e.g. "keep it under N sentences, don't recite
-   the project doc") against a few more live examples.
+1. **Resolved 2026-07-31**: rewrite path run live (Alistair in the wild,
+   plus grounded-context smokes against real Ollama). `_REWRITE_SYSTEM`
+   tuned same day: "context is background for YOU, not content for the
+   rewrite" + a length bound cut rewrites from mini-spec (recited doc
+   boilerplate) to ~3 grounded sentences, verified on both trigger shapes
+   (long-unshaped in prompt-coach, short-vague in email-client -- the
+   second correctly cited that project's design-pack/ and BLUEPRINT.md).
+   `_block_reason()` wording unchanged and reads fine in practice.
 2. `always` mode's per-prompt LLM latency (bounded by `nudge.llm_timeout`,
    default 20s) hasn't been felt in practice - try it for real before
    deciding whether 20s is too generous/stingy, and whether `coach` mode's

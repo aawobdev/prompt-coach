@@ -179,9 +179,15 @@ _REWRITE_SYSTEM = (
     "(working directory, project docs, earlier prompts), ground the rewrite "
     "in it: use the project's real names, paths, and terminology instead of "
     "generic placeholders, and read ambiguous references against what the "
-    "session has been about. Preserve the original intent exactly: don't "
-    "invent requirements the user didn't ask for, don't answer the prompt, "
-    'just rewrite it. Respond with JSON only: {"rewritten_prompt": "..."}'
+    "session has been about. The context is background for YOU, not content "
+    "for the rewrite: never recite, summarize, or restate the project docs "
+    "or conventions -- the assistant reading the prompt already has them. "
+    "Only include a specific name or path where the task itself needs it. "
+    "Keep the rewrite about as long as a well-written version of the "
+    "original ask (a few sentences), never a mini-spec. Preserve the "
+    "original intent exactly: don't invent requirements the user didn't "
+    "ask for, don't answer the prompt, just rewrite it. Respond with JSON "
+    'only: {"rewritten_prompt": "..."}'
 )
 
 # Caps for the context block fed to the rewrite LLM. Generous enough to be
