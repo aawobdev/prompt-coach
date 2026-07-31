@@ -7,7 +7,9 @@ from prompt_coach.nudge import (
     _resolve_mode,
     build_response,
     evaluate,
+    gather_context,
     hook_response_stop,
+    rewrite_prompt,
     should_nudge,
 )
 
@@ -136,7 +138,9 @@ class TestBuildResponseCoachMode:
 
     def test_blocks_with_rewrite_when_llm_available(self, tmp_path, monkeypatch):
         monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
-        monkeypatch.setattr("prompt_coach.nudge.rewrite_prompt", lambda prompt, llm: "REWRITTEN")
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
         cfg = make_cfg(tmp_path)
         resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
         assert resp["decision"] == "block"
@@ -145,7 +149,9 @@ class TestBuildResponseCoachMode:
 
     def test_falls_back_to_tip_when_rewrite_fails(self, tmp_path, monkeypatch):
         monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
-        monkeypatch.setattr("prompt_coach.nudge.rewrite_prompt", lambda prompt, llm: None)
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: None
+        )
         cfg = make_cfg(tmp_path)
         resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
         assert "systemMessage" in resp
@@ -153,7 +159,9 @@ class TestBuildResponseCoachMode:
 
     def test_still_once_per_session_when_blocking(self, tmp_path, monkeypatch):
         monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
-        monkeypatch.setattr("prompt_coach.nudge.rewrite_prompt", lambda prompt, llm: "REWRITTEN")
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
         cfg = make_cfg(tmp_path)
         assert build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg) != {}
         assert build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg) == {}
@@ -162,7 +170,9 @@ class TestBuildResponseCoachMode:
 class TestBuildResponseAlwaysMode:
     def test_ignores_heuristic_and_blocks_ordinary_short_prompt(self, tmp_path, monkeypatch):
         monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
-        monkeypatch.setattr("prompt_coach.nudge.rewrite_prompt", lambda prompt, llm: "REWRITTEN")
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
         cfg = make_cfg(tmp_path, mode="always")
         resp = build_response({"prompt": SHORT_ORDINARY, "session_id": "s1"}, cfg)
         assert resp["decision"] == "block"
@@ -170,7 +180,9 @@ class TestBuildResponseAlwaysMode:
 
     def test_ignores_once_per_session_gate(self, tmp_path, monkeypatch):
         monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
-        monkeypatch.setattr("prompt_coach.nudge.rewrite_prompt", lambda prompt, llm: "REWRITTEN")
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
         cfg = make_cfg(tmp_path, mode="always")
         payload = {"prompt": SHORT_ORDINARY, "session_id": "s1"}
         assert build_response(payload, cfg)["decision"] == "block"
@@ -194,6 +206,151 @@ class TestBuildResponseAlwaysMode:
             cfg,
         )
         assert resp == {}  # already caught pre-submission; nothing left for Stop to do
+
+
+TASK_NOTIFICATION = (
+    "<task-notification>\n<task-id>abc123</task-id>\n<status>completed</status>\n"
+    "<summary>Background command completed (exit code 0)</summary>\n"
+    "</task-notification>" + " padding" * 30  # long enough to trip the A5/A6 trigger
+)
+
+
+class TestMachinePromptsNeverNudged:
+    """Harness-injected payloads (task notifications, command wrappers) and
+    orchestration task specs come through UserPromptSubmit but nobody typed
+    them -- seen live 2026-07-31: nudge blocked a <task-notification> and
+    offered a rewrite of it."""
+
+    def test_task_notification_not_nudged_in_coach_mode(self, tmp_path):
+        cfg = make_cfg(tmp_path)
+        assert build_response({"prompt": TASK_NOTIFICATION, "session_id": "s1"}, cfg) == {}
+
+    def test_task_notification_not_blocked_in_always_mode(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path, mode="always")
+        assert build_response({"prompt": TASK_NOTIFICATION, "session_id": "s1"}, cfg) == {}
+
+    def test_machine_task_spec_not_nudged(self, tmp_path):
+        cfg = make_cfg(tmp_path)
+        spec = "TASK: " + LONG_WEAK
+        assert build_response({"prompt": spec, "session_id": "s1"}, cfg) == {}
+
+    def test_command_wrapper_not_nudged(self, tmp_path):
+        cfg = make_cfg(tmp_path)
+        wrapped = "<command-message>foo</command-message>\n" + LONG_WEAK
+        assert build_response({"prompt": wrapped, "session_id": "s1"}, cfg) == {}
+
+    def test_machine_prompt_does_not_burn_the_session_gate(self, tmp_path):
+        cfg = make_cfg(tmp_path)
+        assert build_response({"prompt": TASK_NOTIFICATION, "session_id": "s1"}, cfg) == {}
+        # a real weak prompt in the same session still gets its nudge
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert "systemMessage" in resp
+
+
+class TestGatherContext:
+    """The rewrite is only worth anything if it is grounded in where the
+    prompt is running (2026-07-31 feedback from live testing outside this
+    repo): cwd, nearest project doc, and recent session prompts."""
+
+    def test_no_payload_context_returns_none(self):
+        assert gather_context({}) is None
+
+    def test_cwd_and_project_doc_included(self, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "CLAUDE.md").write_text("# My project\nUses FastAPI and postgres.")
+        ctx = gather_context({"cwd": str(proj)}, home=tmp_path)
+        assert f"Working directory: {proj}" in ctx
+        assert "CLAUDE.md" in ctx
+        assert "FastAPI" in ctx
+
+    def test_doc_excerpt_is_capped(self, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "CLAUDE.md").write_text("word " * 2000)
+        ctx = gather_context({"cwd": str(proj)}, home=tmp_path)
+        assert len(ctx) < 2500  # 1500-char doc cap plus the framing lines
+
+    def test_redirect_stub_doc_is_skipped(self, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "CLAUDE.md").write_text("See AGENTS.md.")
+        ctx = gather_context({"cwd": str(proj)}, home=tmp_path)
+        assert "See AGENTS.md" not in ctx
+        assert f"Working directory: {proj}" in ctx
+
+    def test_prior_transcript_prompts_included_newest_first(self, tmp_path):
+        transcript = tmp_path / "sess.jsonl"
+        lines = [
+            _user_line("first ask about the parser", uuid="u-1"),
+            _user_line("second ask about the cache", uuid="u-2"),
+        ]
+        transcript.write_text("\n".join(lines) + "\n")
+        ctx = gather_context({"transcript_path": str(transcript), "prompt": "new prompt"})
+        assert "second ask about the cache" in ctx
+        assert "first ask about the parser" in ctx
+        assert ctx.index("second ask") < ctx.index("first ask")
+
+    def test_current_prompt_excluded_from_prior_prompts(self, tmp_path):
+        transcript = tmp_path / "sess.jsonl"
+        lines = [
+            _user_line("earlier ask", uuid="u-1"),
+            _user_line(LONG_WEAK, uuid="u-2"),  # already appended by the time the hook runs
+        ]
+        transcript.write_text("\n".join(lines) + "\n")
+        ctx = gather_context({"transcript_path": str(transcript), "prompt": LONG_WEAK})
+        assert "earlier ask" in ctx
+        assert "redesign the whole reporting pipeline" not in ctx
+
+    def test_missing_transcript_file_is_tolerated(self, tmp_path):
+        ctx = gather_context({"transcript_path": str(tmp_path / "nope.jsonl")})
+        assert ctx is None  # unreadable transcript contributes nothing, no exception
+
+
+class TestRewritePromptContext:
+    class _CapturingLLM:
+        def __init__(self):
+            self.calls = []
+
+        def complete_json(self, system, user, **kwargs):
+            self.calls.append((system, user))
+            return {"rewritten_prompt": "REWRITTEN"}
+
+    def test_context_is_sent_to_the_llm(self):
+        llm = self._CapturingLLM()
+        assert rewrite_prompt("fix it", llm, context="Working directory: /proj") == "REWRITTEN"
+        _, user = llm.calls[0]
+        assert "SESSION CONTEXT" in user
+        assert "Working directory: /proj" in user
+        assert "fix it" in user
+
+    def test_no_context_sends_bare_prompt(self):
+        llm = self._CapturingLLM()
+        rewrite_prompt("fix it", llm)
+        _, user = llm.calls[0]
+        assert user == "fix it"
+
+    def test_build_response_passes_gathered_context_to_rewrite(self, tmp_path, monkeypatch):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "CLAUDE.md").write_text("# proj\nA FastAPI service with a postgres cache layer.")
+        seen = {}
+
+        def fake_rewrite(prompt, llm, context=None):
+            seen["context"] = context
+            return "REWRITTEN"
+
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr("prompt_coach.nudge.rewrite_prompt", fake_rewrite)
+        cfg = make_cfg(tmp_path)
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1", "cwd": str(proj)}, cfg)
+        assert resp["decision"] == "block"
+        assert seen["context"] is not None
+        assert "FastAPI" in seen["context"]
 
 
 class TestBuildResponseOffMode:

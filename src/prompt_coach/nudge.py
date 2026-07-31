@@ -49,9 +49,11 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from prompt_coach.analysis.docs import find_project_docs, is_redirect_stub
 from prompt_coach.analysis.metrics import has_constraints, has_example, has_structured_output
 from prompt_coach.config import Config
 from prompt_coach.models import PromptOrigin
+from prompt_coach.stores.base import classify_origin
 from prompt_coach.stores.claude_code import parse_line
 
 if TYPE_CHECKING:  # never imported at runtime -- see the note below
@@ -89,6 +91,21 @@ _TIP_SCOPE = (
 # rather than added speculatively.
 _BROAD_SCOPE = re.compile(r"\b(everything|all of|whole|revamp)\b", re.IGNORECASE)
 
+# Harness-injected payloads arrive through UserPromptSubmit shaped exactly
+# like typed prompts, but nobody typed them. Seen live 2026-07-31: nudge
+# blocked a <task-notification> (a background-task completion event) and
+# offered to "tighten" it. Match the wrapper tags Claude Code injects as
+# user turns; classify_origin then catches the orchestration task specs
+# (TASK:/HANDOFF: one-shots) on top.
+_HARNESS_WRAPPED = re.compile(
+    r"^\s*<(task-notification|command-message|command-name|system-reminder|"
+    r"local-command-stdout|bash-(input|stdout|stderr))\b"
+)
+
+
+def _is_machine_prompt(prompt: str) -> bool:
+    return bool(_HARNESS_WRAPPED.match(prompt)) or classify_origin(prompt) is PromptOrigin.MACHINE
+
 
 def _is_long_unstructured(prompt: str) -> bool:
     return len(prompt) >= _MIN_PROMPT_CHARS and not (
@@ -105,6 +122,8 @@ def _is_short_and_vague(prompt: str) -> bool:
 
 
 def _tip_for(prompt: str) -> str | None:
+    if _is_machine_prompt(prompt):
+        return None
     if _is_long_unstructured(prompt):
         return _TIP_SHAPE
     if _is_short_and_vague(prompt):
@@ -156,21 +175,69 @@ _REWRITE_SYSTEM = (
     "You rewrite a user's prompt to a coding assistant so it is clearer, "
     "more specific, and better structured -- state an output format or add "
     "a short example if one is missing, name scope/constraints if the ask "
-    "is broad and open-ended. Preserve the original intent exactly: don't "
+    "is broad and open-ended. When a SESSION CONTEXT block is provided "
+    "(working directory, project docs, earlier prompts), ground the rewrite "
+    "in it: use the project's real names, paths, and terminology instead of "
+    "generic placeholders, and read ambiguous references against what the "
+    "session has been about. Preserve the original intent exactly: don't "
     "invent requirements the user didn't ask for, don't answer the prompt, "
     'just rewrite it. Respond with JSON only: {"rewritten_prompt": "..."}'
 )
 
+# Caps for the context block fed to the rewrite LLM. Generous enough to be
+# useful, small enough that the hook's inline LLM call stays well inside the
+# default model's context window even with a long prompt.
+_CTX_DOC_CHARS = 1500
+_CTX_PRIOR_PROMPTS = 3
+_CTX_PROMPT_CHARS = 300
 
-def rewrite_prompt(prompt: str, llm: LocalLLM) -> str | None:
-    """Ask the local LLM for an improved rewrite. Returns None on any
-    failure (unreachable, malformed output) -- callers must have a
-    non-LLM fallback; nudge must never leave a prompt stuck with no way
-    forward."""
+
+def gather_context(payload: dict, home: Path | None = None) -> str | None:
+    """Assemble what we know about where the prompt is running: the working
+    directory, an excerpt of the nearest project doc (CLAUDE.md/AGENTS.md/
+    README.md, same walk-up as the docs-quality analysis), and the last few
+    human prompts from the session transcript. A rewrite with none of this
+    can only ever be generic; the whole value of rewriting in a hook is that
+    the surrounding context is sitting right there in the payload."""
+    parts: list[str] = []
+    cwd = payload.get("cwd")
+    if cwd:
+        parts.append(f"Working directory: {cwd}")
+        for doc_path in find_project_docs(cwd, home=home):
+            try:
+                text = doc_path.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                continue
+            if not text or is_redirect_stub(text):
+                continue
+            parts.append(f"Project doc ({doc_path.name}, excerpt):\n{text[:_CTX_DOC_CHARS]}")
+            break
+    transcript = payload.get("transcript_path")
+    if transcript:
+        current = payload.get("prompt", "").strip()
+        prior = [
+            p
+            for p in _tail_human_prompts(Path(transcript), _CTX_PRIOR_PROMPTS + 1)
+            if p.strip() != current
+        ][:_CTX_PRIOR_PROMPTS]
+        if prior:
+            lines = "\n".join(f"- {p[:_CTX_PROMPT_CHARS]}" for p in prior)
+            parts.append(f"Earlier prompts this session (newest first):\n{lines}")
+    return "\n\n".join(parts) if parts else None
+
+
+def rewrite_prompt(prompt: str, llm: LocalLLM, context: str | None = None) -> str | None:
+    """Ask the local LLM for an improved rewrite, grounded in `context`
+    (see gather_context) when available. Returns None on any failure
+    (unreachable, malformed output) -- callers must have a non-LLM
+    fallback; nudge must never leave a prompt stuck with no way forward."""
     from prompt_coach.llm.client import LLMUnavailable
 
+    user = prompt
+    if context:
+        user = f"SESSION CONTEXT:\n{context}\n\nPROMPT TO REWRITE:\n{prompt}"
     try:
-        result = llm.complete_json(_REWRITE_SYSTEM, prompt, max_tokens=800)
+        result = llm.complete_json(_REWRITE_SYSTEM, user, max_tokens=800)
     except LLMUnavailable:
         return None
     rewritten = result.get("rewritten_prompt")
@@ -203,8 +270,13 @@ def _block_reason(rewritten: str) -> str:
     )
 
 
-def _rewrite_or_fallback(prompt: str, llm: LocalLLM | None, fallback_message: str | None) -> dict:
-    rewritten = rewrite_prompt(prompt, llm) if llm is not None else None
+def _rewrite_or_fallback(
+    prompt: str,
+    llm: LocalLLM | None,
+    fallback_message: str | None,
+    context: str | None = None,
+) -> dict:
+    rewritten = rewrite_prompt(prompt, llm, context=context) if llm is not None else None
     if rewritten is None:
         return {"systemMessage": fallback_message} if fallback_message else {}
     return {"decision": "block", "reason": _block_reason(rewritten)}
@@ -276,19 +348,24 @@ def build_response(payload: dict, cfg: Config) -> dict:
         return {}
 
     if mode == "always":
-        return _rewrite_or_fallback(prompt, _make_llm(cfg), fallback_message=None)
+        if _is_machine_prompt(prompt):
+            return {}  # harness traffic, not a prompt anyone typed
+        llm = _make_llm(cfg)
+        context = gather_context(payload) if llm is not None else None
+        return _rewrite_or_fallback(prompt, llm, fallback_message=None, context=context)
 
     # "coach": only the calibrated triggers, once per session.
     tip = _tip_for(prompt)
     if tip is None or session_id in _load_nudged_sessions(cfg.cache_dir):
         return {}
     _record_nudge(cfg.cache_dir, session_id)
-    return _rewrite_or_fallback(prompt, _make_llm(cfg), fallback_message=tip)
+    llm = _make_llm(cfg)
+    context = gather_context(payload) if llm is not None else None
+    return _rewrite_or_fallback(prompt, llm, fallback_message=tip, context=context)
 
 
-def _last_human_prompt(transcript_path: Path) -> str | None:
-    """Stop's hook input carries no prompt text -- only session_id and
-    transcript_path -- so recover the just-submitted prompt by tailing the
+def _tail_human_prompts(transcript_path: Path, limit: int) -> list[str]:
+    """Up to `limit` most recent human prompts, newest first, by tailing the
     transcript JSONL from EOF and reusing the same acceptance filters as the
     real corpus reader (parse_line), rather than inventing a second parser.
     Tails in growing chunks instead of reading the whole file: transcripts
@@ -296,19 +373,31 @@ def _last_human_prompt(transcript_path: Path) -> str | None:
     try:
         size = transcript_path.stat().st_size
     except OSError:
-        return None
+        return []
+    found: list[str] = []
     with open(transcript_path, "rb") as f:
         for chunk_n in range(1, _TAIL_MAX_CHUNKS + 1):
             start = max(0, size - _TAIL_CHUNK * chunk_n)
             f.seek(start)
             data = f.read()
+            found.clear()  # rescan: the bigger window re-covers the smaller one
             for line in reversed(data.decode("utf-8", errors="replace").splitlines()):
                 prompt = parse_line(line)
                 if prompt is not None and prompt.origin is PromptOrigin.HUMAN:
-                    return prompt.content
+                    found.append(prompt.content)
+                    if len(found) >= limit:
+                        return found
             if start == 0:
                 break
-    return None
+    return found
+
+
+def _last_human_prompt(transcript_path: Path) -> str | None:
+    """Stop's hook input carries no prompt text -- only session_id and
+    transcript_path -- so recover the just-submitted prompt from the
+    transcript tail."""
+    prompts = _tail_human_prompts(transcript_path, 1)
+    return prompts[0] if prompts else None
 
 
 def hook_response_stop(session_id: str, transcript_path: Path, cache_dir: Path) -> dict:

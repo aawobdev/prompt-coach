@@ -780,3 +780,62 @@ outside this repo), local `~/.cache/prompt-coach/cache.db` (cleared and
 resynced). No source code changes -- this entry is a verification record,
 not a build.
 **Decided by**: Alistair ("all of it"), 2026-07-30.
+
+## 2026-07-31 - Live feedback round: grounded rewrites, machine-payload guard, setup TTY
+
+**Trigger**: Alistair used the live hook outside this repo and reported
+three things in one session: (1) the LLM rewrite is generic -- "the prompt
+improvement stuff must use the context the 'bad' prompt is running in,
+otherwise it's nowhere near as valuable"; (2) the nudge fired on a
+harness-injected `<task-notification>` payload (a background-build
+completion event) and offered to "tighten" it; (3) `/prompt-coach setup`
+died with "Aborted." because the slash command's shell injection has no
+TTY for the wizard's interactive prompts.
+**Decision**:
+- **Grounded rewrites** (`nudge.py gather_context()`): the rewrite call
+  now sends a SESSION CONTEXT block -- working directory, an excerpt of
+  the nearest project doc (reusing `find_project_docs`/`is_redirect_stub`
+  from the docs-quality analysis, redirect stubs skipped), and the last
+  few human prompts tailed from the session transcript (generalising the
+  Stop hook's `_last_human_prompt` into `_tail_human_prompts`; the
+  just-submitted prompt is filtered out by stripped-text comparison since
+  parse_line strips content). Caps: 1500 chars of doc, 3 prior prompts at
+  300 chars each -- generous enough to ground, small enough to stay well
+  inside the 32k-ctx default model with the hook's 20s timeout. Context
+  is only gathered when the LLM probe succeeds, so the degraded path pays
+  no filesystem cost. Live smoke against the real desktop Ollama: the
+  rewrite went from generic filler to naming uv/ruff/black, AGENTS.md,
+  the A1-A13 rubric, and the real store paths. It now leans verbose
+  (stuffs in doc boilerplate) -- tuning `_REWRITE_SYSTEM` stays on the
+  pick-up list, but the grounding itself is what makes it worth tuning.
+- **Machine-payload guard** (`_is_machine_prompt`): harness-injected
+  payloads arrive through UserPromptSubmit shaped exactly like typed
+  prompts. New `_HARNESS_WRAPPED` regex matches the wrapper tags Claude
+  Code injects as user turns (`task-notification`, `command-message`,
+  `command-name`, `system-reminder`, `local-command-stdout`, `bash-*`),
+  plus `classify_origin` from stores/base.py for TASK:/HANDOFF:
+  orchestration specs. Guard sits in `_tip_for` (covers coach mode, Stop,
+  and Hermes) and at the top of the `always` path (which bypasses
+  `_tip_for` by design). A blocked machine payload also no longer burns
+  the once-per-session gate. Verified with the exact live payload against
+  both `uv run` and the installed binary.
+- **setup without a TTY**: wizard body moved to `_setup_wizard()`; the
+  `setup` command wraps it and catches click's `Abort` (EOF on any
+  question, or Ctrl-C), printing a pointer to run it in a real shell and
+  exiting 0 -- consistent with the first-run-isn't-an-error convention.
+  Test note: click's CliRunner feeds prompts their defaults on input
+  exhaustion instead of raising Abort (the real no-TTY run does abort, as
+  the live paste showed), so the test injects Abort at the wizard
+  boundary rather than pretending an empty input stream reproduces it.
+- Reinstalled via `uv tool install --force .` and re-verified against the
+  installed binary -- the stale-installed-tool trap from 2026-07-30 is why
+  this is now a standard closing step, not an afterthought.
+**Alternatives considered**: putting the harness-wrapper patterns into
+stores/base.py's `classify_origin` was rejected for now -- the corpus
+readers already filter these via transcript metadata (`promptSource`,
+origin kind), so the text-shape guard is a hook-payload concern, not a
+corpus one. Widening it later if wrapped payloads ever show up in corpus
+stats is cheap.
+**Affects**: nudge.py, cli.py, test_nudge.py, test_cli.py. 260 tests (up
+from 243).
+**Decided by**: Alistair (live feedback), built same session, 2026-07-31.

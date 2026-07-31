@@ -1,10 +1,29 @@
 # Project Status - prompt-coach
-Last updated: 2026-07-30 by Claude (Sonnet 5): Claude Code slash command +
-Hermes nudge equivalent shipped, two test gaps closed, CI added, both
-hooks re-enabled live, cache backfilled, thresholds checked against real
-data. 243 tests, up from 231. This code is committed and pushed (main);
-the hook/config changes below are outside this repo (~/.claude/,
-~/.hermes/, ~/.cache/) and were applied directly, not just documented.
+Last updated: 2026-07-31 by Claude (Fable 5): live-feedback round --
+nudge rewrites now grounded in the running context (cwd, project doc,
+recent session prompts), machine payloads (task notifications, command
+wrappers) no longer nudged, setup exits cleanly without a TTY. 260
+tests, up from 243. Reinstalled binary verified live.
+
+## Live feedback round: grounded rewrites + two bug fixes (2026-07-31)
+
+Alistair used the hook outside this repo; DECISIONS.md (2026-07-31) has
+the full detail. Shipped:
+- `gather_context()` in nudge.py: the rewrite LLM now gets a SESSION
+  CONTEXT block (cwd, nearest project doc excerpt via the docs-quality
+  finder, last 3 human prompts tailed from the transcript). Live smoke
+  against real desktop Ollama: rewrite went from generic to naming this
+  repo's actual conventions and paths. Still verbose -- `_REWRITE_SYSTEM`
+  tuning remains on the pick-up list.
+- **Bug (seen live)**: nudge blocked a `<task-notification>` background-
+  task event and offered to "rewrite" it. New `_is_machine_prompt` guard
+  (harness wrapper tags + `classify_origin`) covers coach/always/Stop/
+  Hermes paths; machine payloads no longer burn the session gate either.
+- **Bug (seen live)**: `/prompt-coach setup` died with "Aborted." (no
+  TTY for the wizard). Now catches click's Abort, prints a run-it-in-a-
+  real-shell pointer, exits 0.
+- `uv tool install --force .` re-run and fixes verified against the
+  installed binary (the hook's actual target).
 
 ## Claude Code slash command + Hermes nudge equivalent (2026-07-30)
 
@@ -254,12 +273,12 @@ against the real backfilled data and found already well-calibrated - no
 changes made, the "no change needed" finding is recorded rather than
 silently assumed.
 
-1. Nudge's `coach`/`always` block-and-rewrite path was only smoke-tested
-   with the LLM unreachable (sandboxed dev environment) or mocked
-   (`_make_llm`/`rewrite_prompt` monkeypatched in tests) - never against a
-   real reachable Ollama. Run it live once the desktop box is on and watch
-   what an actual rewrite looks like; the `_REWRITE_SYSTEM` prompt and the
-   `_block_reason()` wording are first-guess, not tuned against real output.
+1. **Partially resolved 2026-07-31**: the rewrite path has now run live
+   (Alistair hit it in the wild; grounded-context smoke against real
+   Ollama in this repo). Remaining: real grounded rewrites lean verbose -
+   they stuff in project-doc boilerplate alongside the useful specifics.
+   Tune `_REWRITE_SYSTEM` (e.g. "keep it under N sentences, don't recite
+   the project doc") against a few more live examples.
 2. `always` mode's per-prompt LLM latency (bounded by `nudge.llm_timeout`,
    default 20s) hasn't been felt in practice - try it for real before
    deciding whether 20s is too generous/stingy, and whether `coach` mode's

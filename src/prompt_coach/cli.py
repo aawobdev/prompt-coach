@@ -168,6 +168,24 @@ def setup():
     endpoint/model, nudge mode, model-fit mode, and optionally a per-directory
     nudge override -- writes ~/.config/prompt-coach/config.toml. Ends by
     offering to run a report or open the dashboard."""
+    from click.exceptions import Abort
+
+    try:
+        _setup_wizard()
+    except Abort:
+        # EOF on a question (no terminal -- e.g. run via the /prompt-coach
+        # slash command, seen live 2026-07-31) or Ctrl-C. Either way it's a
+        # cancelled wizard, not a failure: exit 0 with a pointer, matching
+        # the first-run-isn't-an-error convention.
+        typer.echo(
+            "\nsetup stopped early -- it asks questions interactively, so it "
+            "needs a real terminal. Run `prompt-coach setup` in a shell "
+            "(not via /prompt-coach)."
+        )
+        raise typer.Exit(0) from None
+
+
+def _setup_wizard():
     from prompt_coach.config import (
         MODEL_FIT_MODES,
         NUDGE_MODES,

@@ -202,7 +202,9 @@ def test_nudge_hook_off_mode_is_silent(env, monkeypatch):
 def test_nudge_hook_always_mode_blocks_with_llm_rewrite(env, monkeypatch):
     monkeypatch.setenv("PROMPT_COACH_NUDGE_MODE", "always")
     monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
-    monkeypatch.setattr("prompt_coach.nudge.rewrite_prompt", lambda prompt, llm: "REWRITTEN")
+    monkeypatch.setattr(
+        "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+    )
     payload = json.dumps({"prompt": "add a retry to the fetcher", "session_id": "hook-s4"})
     result = runner.invoke(app, ["nudge"], input=payload)
     assert result.exit_code == 0
@@ -328,6 +330,25 @@ def test_setup_wizard_dir_override_written(env):
     written = config_path.read_text()
     assert "[nudge.dir_overrides]" in written
     assert '"off"' in written
+
+
+def test_setup_without_a_terminal_exits_cleanly(env, monkeypatch):
+    # Without a TTY the first typer.confirm hits EOF and click raises Abort
+    # -- exactly what happens when setup runs via the /prompt-coach slash
+    # command (seen live 2026-07-31). CliRunner can't reproduce that (its
+    # exhausted input stream feeds prompts their defaults instead), so
+    # inject the Abort at the wizard boundary. Must exit 0 with a pointer,
+    # not "Aborted." + exit 1.
+    from click.exceptions import Abort
+
+    def raise_abort():
+        raise Abort()
+
+    monkeypatch.setattr("prompt_coach.cli._setup_wizard", raise_abort)
+    result = runner.invoke(app, ["setup"])
+    assert result.exit_code == 0, result.output
+    assert "needs a real terminal" in result.output
+    assert not (env / "xdg-config" / "prompt-coach" / "config.toml").exists()
 
 
 def test_dash_no_sync_skips_sync(env, monkeypatch):
