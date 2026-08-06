@@ -2,9 +2,11 @@
 
 - "coach" (default): the calibrated weak-prompt triggers fire at most once
   per session. When the local LLM is reachable, the prompt is BLOCKED and an
-  LLM-rewritten version is offered in the block reason -- you paste it in
-  yourself if you want it, nothing auto-resubmits. When the LLM isn't
-  reachable, it degrades to the old non-blocking systemMessage tip.
+  LLM-rewritten version is offered in the block reason -- run /coach-accept
+  to resend the rewrite or /coach-original to resend your prompt as-is (see
+  consume_pending_rewrite below; these are ~/.claude/commands/ slash
+  commands, not part of this package). When the LLM isn't reachable, it
+  degrades to the old non-blocking systemMessage tip.
 - "always": every UserPromptSubmit is blocked and rewritten, regardless of
   quality or session history -- an explicit opt-in, since it adds LLM
   latency to every prompt. If the LLM is unreachable, the prompt is let
@@ -272,19 +274,86 @@ def _block_reason(rewritten: str) -> str:
     return (
         "prompt-coach held this prompt back -- here's a tighter rewrite:\n\n"
         f"{rewritten}\n\n"
-        "Paste that in if you want it, or resend your original as-is."
+        "Run /coach-accept to send the rewrite, or /coach-original to send "
+        "your prompt as-is."
     )
+
+
+def _pending_path(cache_dir: Path) -> Path:
+    return cache_dir / "nudge_pending.json"
+
+
+def _load_pending_state(cache_dir: Path) -> dict:
+    path = _pending_path(cache_dir)
+    default = {"pending": {}, "skip_next": []}
+    if not path.is_file():
+        return default
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return default
+    if not isinstance(data, dict):
+        return default
+    data.setdefault("pending", {})
+    data.setdefault("skip_next", [])
+    return data
+
+
+def _write_pending_state(cache_dir: Path, data: dict) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    _pending_path(cache_dir).write_text(json.dumps(data))
+
+
+def _save_pending_rewrite(cache_dir: Path, session_id: str, original: str, rewritten: str) -> None:
+    """Record what a block offered, so /coach-accept and /coach-original
+    (see nudge_consume in cli.py) can later resend the right text without
+    the user having to copy/paste it themselves."""
+    data = _load_pending_state(cache_dir)
+    data["pending"][session_id] = {"original": original, "rewritten": rewritten}
+    overflow = len(data["pending"]) - _MAX_TRACKED_SESSIONS
+    for key in list(data["pending"])[: max(overflow, 0)]:
+        del data["pending"][key]
+    _write_pending_state(cache_dir, data)
+
+
+def consume_pending_rewrite(cache_dir: Path, session_id: str, want: str) -> str | None:
+    """CLI entry point for /coach-accept and /coach-original: pop the
+    pending rewrite for `session_id` and return `want` ("rewritten" or
+    "original"), or None if nothing is pending (stale/reused command).
+    Also marks the session to skip the nudge gate on its next
+    UserPromptSubmit, so resending the chosen text doesn't immediately get
+    held back again."""
+    data = _load_pending_state(cache_dir)
+    entry = data["pending"].pop(session_id, None)
+    if entry is None:
+        return None
+    if session_id not in data["skip_next"]:
+        data["skip_next"].append(session_id)
+    _write_pending_state(cache_dir, data)
+    return entry.get(want)
+
+
+def _pop_skip_next(cache_dir: Path, session_id: str) -> bool:
+    data = _load_pending_state(cache_dir)
+    if session_id not in data["skip_next"]:
+        return False
+    data["skip_next"].remove(session_id)
+    _write_pending_state(cache_dir, data)
+    return True
 
 
 def _rewrite_or_fallback(
     prompt: str,
     llm: LocalLLM | None,
     fallback_message: str | None,
+    cache_dir: Path,
+    session_id: str,
     context: str | None = None,
 ) -> dict:
     rewritten = rewrite_prompt(prompt, llm, context=context) if llm is not None else None
     if rewritten is None:
         return {"systemMessage": fallback_message} if fallback_message else {}
+    _save_pending_rewrite(cache_dir, session_id, prompt, rewritten)
     return {"decision": "block", "reason": _block_reason(rewritten)}
 
 
@@ -353,12 +422,25 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if not prompt:
         return {}
 
+    if _pop_skip_next(cfg.cache_dir, session_id):
+        # This is the resend triggered by /coach-accept or /coach-original
+        # (consume_pending_rewrite set this flag) -- let it through as-is,
+        # regardless of mode, rather than immediately holding it back again.
+        return {}
+
     if mode == "always":
         if _is_machine_prompt(prompt):
             return {}  # harness traffic, not a prompt anyone typed
         llm = _make_llm(cfg)
         context = gather_context(payload) if llm is not None else None
-        return _rewrite_or_fallback(prompt, llm, fallback_message=None, context=context)
+        return _rewrite_or_fallback(
+            prompt,
+            llm,
+            fallback_message=None,
+            cache_dir=cfg.cache_dir,
+            session_id=session_id,
+            context=context,
+        )
 
     # "coach": only the calibrated triggers, once per session.
     tip = _tip_for(prompt)
@@ -367,7 +449,14 @@ def build_response(payload: dict, cfg: Config) -> dict:
     _record_nudge(cfg.cache_dir, session_id)
     llm = _make_llm(cfg)
     context = gather_context(payload) if llm is not None else None
-    return _rewrite_or_fallback(prompt, llm, fallback_message=tip, context=context)
+    return _rewrite_or_fallback(
+        prompt,
+        llm,
+        fallback_message=tip,
+        cache_dir=cfg.cache_dir,
+        session_id=session_id,
+        context=context,
+    )
 
 
 def _tail_human_prompts(transcript_path: Path, limit: int) -> list[str]:

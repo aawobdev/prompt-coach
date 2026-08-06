@@ -6,6 +6,7 @@ from prompt_coach.config import Config, LLMConfig, ModelFitConfig, NudgeConfig, 
 from prompt_coach.nudge import (
     _resolve_mode,
     build_response,
+    consume_pending_rewrite,
     evaluate,
     gather_context,
     hook_response_stop,
@@ -206,6 +207,83 @@ class TestBuildResponseAlwaysMode:
             cfg,
         )
         assert resp == {}  # already caught pre-submission; nothing left for Stop to do
+
+
+class TestPendingRewrite:
+    """/coach-accept and /coach-original (~/.claude/commands/, not part of
+    this package) resend one side of a block via `nudge-consume`, which
+    calls consume_pending_rewrite. A block must stash {original, rewritten}
+    for that to work, and the resend it triggers must not be immediately
+    held back again."""
+
+    def test_block_reason_points_at_the_slash_commands(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path)
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert "/coach-accept" in resp["reason"]
+        assert "/coach-original" in resp["reason"]
+
+    def test_consume_returns_rewritten_or_original(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path)
+        build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert consume_pending_rewrite(cfg.cache_dir, "s1", "rewritten") == "REWRITTEN"
+
+    def test_consume_is_one_shot(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path)
+        build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        consume_pending_rewrite(cfg.cache_dir, "s1", "rewritten")
+        assert consume_pending_rewrite(cfg.cache_dir, "s1", "rewritten") is None
+
+    def test_consume_with_nothing_pending_returns_none(self, tmp_path):
+        cfg = make_cfg(tmp_path)
+        assert consume_pending_rewrite(cfg.cache_dir, "no-such-session", "rewritten") is None
+
+    def test_original_side_is_the_untouched_prompt(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path)
+        build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert consume_pending_rewrite(cfg.cache_dir, "s1", "original") == LONG_WEAK
+
+    def test_resend_after_consume_is_not_immediately_reblocked(self, tmp_path, monkeypatch):
+        """Simulates /coach-original: the session already used its
+        once-per-session gate on the block, so this only proves the
+        explicit skip flag also works for e.g. "always" mode, which has no
+        such gate."""
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path, mode="always")
+        build_response({"prompt": SHORT_ORDINARY, "session_id": "s1"}, cfg)
+        rewritten = consume_pending_rewrite(cfg.cache_dir, "s1", "rewritten")
+        resp = build_response({"prompt": rewritten, "session_id": "s1"}, cfg)
+        assert resp == {}  # skip flag consumed -- let through, not re-blocked
+
+    def test_skip_flag_is_also_one_shot(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path, mode="always")
+        build_response({"prompt": SHORT_ORDINARY, "session_id": "s1"}, cfg)
+        rewritten = consume_pending_rewrite(cfg.cache_dir, "s1", "rewritten")
+        build_response({"prompt": rewritten, "session_id": "s1"}, cfg)  # consumes the skip flag
+        resp = build_response({"prompt": SHORT_ORDINARY, "session_id": "s1"}, cfg)
+        assert resp["decision"] == "block"  # back to normal always-mode blocking
 
 
 TASK_NOTIFICATION = (

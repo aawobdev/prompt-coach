@@ -44,14 +44,26 @@ uv run prompt-coach import chatgpt-export.zip   # ChatGPT official data export
 | `query` | Natural-language question over your prompt history, with citations |
 | `nudge` | Hook target for Claude Code (`UserPromptSubmit` + `Stop`) and Hermes (`pre_llm_call`). On Claude Code, default `coach` mode blocks weak prompts with an LLM-rewritten suggestion (degrades to a one-line tip if the LLM is unreachable), once per session; `always` mode blocks and rewrites every prompt; `off` disables it. On Hermes, `pre_llm_call` can only inject context, not block, so it's always tip-only regardless of mode (`always` collapses to `coach`'s behavior there). Set via `PROMPT_COACH_NUDGE_MODE` or `[nudge] mode` in config.toml. Not meant to be run by hand. |
 | `import` | Import a ChatGPT export (ZIP/JSON) or simple JSON sessions; format auto-detected |
+| `nudge-consume` | Internal target for the `/coach-accept` / `/coach-original` slash commands below -- pops the pending rewrite for a session and prints one side of it. Not meant to be run by hand. |
 | `cache sync/info/clear` | Manage the local analysis cache |
 
-## Claude Code slash command
+## Claude Code slash commands
 
 `~/.claude/commands/prompt-coach.md` (global, any project) runs
 `/prompt-coach report --since 7d`, `/prompt-coach dash --plain`, etc. -- any
 `prompt-coach` subcommand, passed straight through. Not part of this repo
 (it's Claude Code user config), but worth knowing it exists.
+
+`~/.claude/commands/coach-accept.md` and `~/.claude/commands/coach-original.md`
+are the closest thing Claude Code's hook contract allows to a button on a
+`nudge` block: `UserPromptSubmit` can only `block` (text reason) or
+`continue`, there's no interactive-choice mechanism, so a real accept/reject
+button isn't possible. Instead, when `nudge` blocks a prompt with a rewrite
+it also stashes `{original, rewritten}` keyed by session ID
+(`~/.cache/prompt-coach/nudge_pending.json`). `/coach-accept` resends the
+rewrite; `/coach-original` resends your prompt untouched; both mark the
+session to skip the nudge gate once, so the resend isn't immediately held
+back again. Also global user config, not part of this repo.
 
 ## Wiring `nudge` into Hermes
 

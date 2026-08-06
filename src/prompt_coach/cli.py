@@ -574,6 +574,27 @@ def nudge():
     typer.echo(_json.dumps(response))
 
 
+@app.command("nudge-consume")
+def nudge_consume(
+    want: str = typer.Option(..., "--want", help="'rewritten' or 'original'"),
+    session: str = typer.Option(..., "--session", help="Claude Code session ID"),
+):
+    """Internal target for the /coach-accept and /coach-original slash
+    commands (~/.claude/commands/, not part of this package): pops the
+    rewrite `nudge` held onto for SESSION and prints the requested side of
+    it, so the slash command's bash substitution can resend it as the next
+    message. Always exits 0 -- its stdout is spliced straight into the next
+    prompt, so a failure should read as a note, not break the substitution."""
+    from prompt_coach.nudge import consume_pending_rewrite
+
+    cfg = load_config()
+    text = consume_pending_rewrite(cfg.cache_dir, session, want)
+    if text is None:
+        typer.echo("(no prompt-coach rewrite is pending for this session)")
+        return
+    typer.echo(text)
+
+
 @app.command()
 def serve():
     """Read-only HTTP API (not yet available)."""

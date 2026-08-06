@@ -1,9 +1,35 @@
 # Project Status - prompt-coach
-Last updated: 2026-07-31 by Claude (Fable 5): live-feedback round --
-nudge rewrites now grounded in the running context (cwd, project doc,
-recent session prompts), machine payloads (task notifications, command
-wrappers) no longer nudged, setup exits cleanly without a TTY. 260
-tests, up from 243. Reinstalled binary verified live.
+Last updated: 2026-08-07 by Claude (Sonnet 5): nudge blocks are now
+resolvable via /coach-accept and /coach-original slash commands instead
+of copy-paste. 269 tests, up from 260. Reinstalled binary verified live.
+
+## Accept/reject slash commands for nudge blocks (2026-08-07)
+
+Alistair asked for a button on nudge's block-and-rewrite flow, pure
+quality-of-life -- the copy-paste-it-yourself step was friction on every
+block. DECISIONS.md (2026-08-07) has the full detail on why real
+interactive buttons aren't possible in Claude Code's hook contract and
+why slash commands are the closest real equivalent. Shipped:
+- `nudge.py`: when a block offers a rewrite, `{original, rewritten}` is
+  now stashed keyed by session ID in a new `nudge_pending.json` (capped
+  at 500 entries, same bound as the existing nudged-sessions state).
+  Consuming an entry also sets a one-shot `skip_next` flag, checked at
+  the top of `build_response`'s prompt path, so resending the chosen
+  text doesn't immediately get held back again -- needed for `always`
+  mode, which has no once-per-session gate to lean on instead.
+- `cli.py`: new `nudge-consume` subcommand pops the pending entry for a
+  session and prints the requested side (`rewritten` or `original`).
+- `~/.claude/commands/coach-accept.md` and `coach-original.md` (global,
+  outside this repo, same `!`command`` substitution pattern as the
+  existing `/prompt-coach` command): run `nudge-consume` and resend its
+  output as the next message.
+- `_block_reason()` now points at the two commands instead of "paste
+  that in if you want it."
+- 269 tests (up from 260): `TestPendingRewrite` in test_nudge.py, two
+  CLI round-trip tests in test_cli.py. ruff/black clean, no em dashes.
+- Reinstalled via `uv tool install --force .` and verified live: a real
+  block against the desktop Ollama model, then `nudge-consume` for both
+  `rewritten` and `original`, against the installed binary.
 
 ## Live feedback round: grounded rewrites + two bug fixes (2026-07-31)
 

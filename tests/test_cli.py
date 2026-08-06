@@ -213,6 +213,29 @@ def test_nudge_hook_always_mode_blocks_with_llm_rewrite(env, monkeypatch):
     assert "REWRITTEN" in body["reason"]
 
 
+def test_nudge_consume_prints_rewritten_side(env, monkeypatch):
+    monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+    monkeypatch.setattr(
+        "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+    )
+    payload = json.dumps(
+        {
+            "prompt": "please help me redesign the whole reporting pipeline. " * 5,
+            "session_id": "hook-s5",
+        }
+    )
+    runner.invoke(app, ["nudge"], input=payload)  # blocks, stashes the pending rewrite
+    result = runner.invoke(app, ["nudge-consume", "--want", "rewritten", "--session", "hook-s5"])
+    assert result.exit_code == 0
+    assert result.output.strip() == "REWRITTEN"
+
+
+def test_nudge_consume_nothing_pending_is_not_an_error(env):
+    result = runner.invoke(app, ["nudge-consume", "--want", "rewritten", "--session", "no-such"])
+    assert result.exit_code == 0
+    assert "no prompt-coach rewrite is pending" in result.output
+
+
 def test_import_roundtrip(env, sample_sessions_path):
     result = runner.invoke(app, ["import", str(sample_sessions_path)])
     assert result.exit_code == 0

@@ -860,3 +860,45 @@ fine around the tighter rewrites.
 **Affects**: nudge.py (`_REWRITE_SYSTEM` only, no logic change). 260
 tests unchanged. Binary reinstalled, smoke residue cleaned.
 **Decided by**: follow-through on the same-session pick-up item, 2026-07-31.
+
+## 2026-08-07 - Accept/reject slash commands for nudge blocks: buttons aren't possible, slash commands are the closest thing
+
+**Trigger**: Alistair asked for a button on the nudge block-and-rewrite
+flow -- one to accept the rewrite, one to send the original as-is. Pure
+quality-of-life: pasting the rewrite back in by hand was friction on
+every block.
+**Decision**: Checked live against current Claude Code hook docs (not
+assumed): `UserPromptSubmit`'s output schema has no interactive-choice
+mechanism -- only `block`/`continue` plus `reason`/`systemMessage`/
+`additionalContext` text fields. The `"ask"` decision that produces real
+Yes/No/Always buttons is `PreToolUse`-only, not available here. Closest
+real equivalent: custom slash commands -- discoverable via tab-complete,
+no free-text guessing, same `!`command`` substitution pattern the
+existing `~/.claude/commands/prompt-coach.md` already uses, and
+`${CLAUDE_SESSION_ID}` is available as a substitution variable to key
+state by session. Shipped: when a block offers a rewrite,
+`_save_pending_rewrite` stashes `{original, rewritten}` keyed by session
+ID in a new `nudge_pending.json` (bounded like the existing
+nudged-sessions state, oldest dropped past 500). Two new global slash
+commands, `~/.claude/commands/coach-accept.md` and `coach-original.md`
+(not part of this repo -- it's Claude Code user config, same as
+`prompt-coach.md`), run `prompt-coach nudge-consume --want
+{rewritten,original} --session "${CLAUDE_SESSION_ID}"` and resend the
+output as the next message. Popping the pending entry also sets a
+one-shot `skip_next` flag, checked at the top of `build_response`'s
+prompt path, so the resend isn't immediately re-blocked -- needed for
+`always` mode, which has no once-per-session gate to fall back on.
+**Alternatives considered**: a bare y/n reply recognized on the next
+`UserPromptSubmit` -- rejected, since it collides with any real
+one-letter prompt and isn't discoverable the way a tab-completed slash
+command is.
+**Affects**: nudge.py (pending-state helpers, `_block_reason` wording,
+skip check in `build_response`), cli.py (`nudge-consume`), README.md,
+test_nudge.py, test_cli.py. 269 tests (up from 260). Two new files
+outside this repo: `~/.claude/commands/coach-accept.md`,
+`coach-original.md`.
+**Decided by**: Alistair, built same session, 2026-08-07. Reinstalled
+via `uv tool install --force .` and verified live -- a real block
+against the desktop Ollama model, then `nudge-consume` for both
+`rewritten` and `original` -- against the installed binary, not just
+`uv run`.
