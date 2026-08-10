@@ -942,3 +942,34 @@ transcript is not a thing hooks can do.
 `_REWRITE_SYSTEM`), cli.py (nudge docstring), test_nudge.py
 (`TestBuildResponseAutoMode`), test_config.py. 276 tests (up from 269).
 **Decided by**: Alistair, built same session, 2026-08-10.
+
+## 2026-08-10 - Auto mode second pass: no local LLM, the session model refines its own prompt
+
+**Trigger**: same-session follow-up. The first cut of auto mode called
+the local rewrite LLM from the hook, and its live output showed the
+known weakness again (recited AGENTS.md conventions into a rewrite,
+invented requirements). Alistair: "let's not use a local model, let's
+just use the one in the current context."
+**Decision**: auto mode now calls no LLM at all. The injected
+`additionalContext` no longer carries a finished rewrite -- it carries
+a directive telling the session model itself to silently refine the
+prompt (pin scope/constraints, decide output shape, tables for
+list-shaped answers, charts/diagrams when items have relationships or
+proportions) and open its reply with a one-line "Refined:" statement
+so the user still sees what was actually answered. This is better on
+every axis for the auto case: the session model has the full repo and
+conversation in context (vs gather_context's 1.5KB doc excerpt and
+three prompt tails), it is a strictly stronger model than
+qwen3-coder-30b, hook latency drops to near zero, and the desktop
+being off no longer matters -- which also deletes the degraded-tip
+fallback path. Coach and always modes keep the local LLM: they must
+show concrete rewrite text *before* it is sent, which the session
+model cannot produce pre-submission. The visible receipt moves from
+the systemMessage (which showed the full rewrite) to the "Refined:"
+line in the model's reply.
+**Affects**: nudge.py (`_AUTO_RESPONSE` constant replaces
+`_auto_apply_response` + LLM plumbing in the auto branch, docstrings),
+config.py/cli.py comment updates, test_nudge.py
+(`TestBuildResponseAutoMode` rewritten, including a guard test that
+auto never constructs an LLM client). 275 tests.
+**Decided by**: Alistair, same session, 2026-08-10.

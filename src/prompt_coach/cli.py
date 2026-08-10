@@ -558,10 +558,10 @@ def nudge():
     prints a hook-response JSON to stdout, dispatching on the payload's
     hook_event_name. Mode ("coach"/"auto"/"always"/"off") comes from config
     -- see nudge.py's module docstring. No store sync. In Claude Code's
-    "coach"/"auto"/"always" modes this may call the local LLM (bounded by
-    its own short timeout, not the 120s default) and block or auto-rewrite
-    the prompt; must never raise -- a hook failure would block every prompt
-    or response."""
+    "coach"/"always" modes this may call the local LLM (bounded by its own
+    short timeout, not the 120s default) and block the prompt; "auto" is
+    LLM-free and injects a self-improve directive instead. Must never raise
+    -- a hook failure would block every prompt or response."""
     import json as _json
 
     from prompt_coach.nudge import build_response

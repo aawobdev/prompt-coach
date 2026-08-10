@@ -1188,14 +1188,19 @@ made, the "no change needed" finding recorded in DECISIONS.md rather than
 left ambiguous for a future session to re-litigate.
 
 **17.6 "auto" nudge mode + table/visual output steering** (2026-08-10):
-`nudge.mode = "auto"` applies the LLM rewrite automatically -- same
+`nudge.mode = "auto"` applies prompt improvement automatically -- same
 calibrated triggers as coach decide, but instead of blocking with an
-accept/reject choice, the rewrite is injected as authoritative
-`additionalContext` (UserPromptSubmit hooks cannot replace prompt text;
-re-verified against the hook docs) with a `systemMessage` showing what
-was applied. No once-per-session gate (nothing interrupts, so nothing
-to ration); LLM-unreachable degrades to the coach-style gated tip;
-Stop and Hermes paths unchanged. `_REWRITE_SYSTEM` also now steers
-list-shaped answers toward tables (or charts/diagrams when items have
-relationships/proportions) in every mode. 276 tests (up from 269).
-See DECISIONS.md 2026-08-10.
+accept/reject choice, the hook injects an `additionalContext` directive
+(UserPromptSubmit hooks cannot replace prompt text; re-verified against
+the hook docs) telling the session model itself to refine the prompt --
+scope, output shape, tables/visuals for list-shaped answers -- and open
+its reply with a one-line "Refined:" statement. No LLM call in the hook
+at all: the first cut used the local rewrite model, but live testing
+showed the session model is better on every axis (full repo/conversation
+context vs 1.5KB excerpts, stronger model, zero latency, no dependency
+on the desktop being up), so auto is LLM-free by design. No
+once-per-session gate (nothing interrupts, so nothing to ration); Stop
+and Hermes paths unchanged. `_REWRITE_SYSTEM` (still used by coach/
+always) also now steers list-shaped answers toward tables (or charts/
+diagrams when items have relationships/proportions). 275 tests. See
+DECISIONS.md 2026-08-10 (both entries).

@@ -8,15 +8,20 @@
   commands, not part of this package). When the LLM isn't reachable, it
   degrades to the old non-blocking systemMessage tip.
 - "auto": the same calibrated triggers as coach decide whether a prompt
-  needs work, but the rewrite is applied automatically -- the prompt is
-  NOT blocked and there is no accept/reject step. UserPromptSubmit hooks
-  cannot replace the prompt text (only block it or add context -- checked
-  against the hooks docs 2026-08-10), so the rewrite rides in as
-  `additionalContext` explicitly marked as the authoritative version of
-  the request, plus a `systemMessage` so the user sees what was applied.
-  No once-per-session gate: auto mode never interrupts, so there is no
-  nag cost to ration -- every triggered prompt gets improved. If the LLM
-  is unreachable it degrades to the coach-style gated tip.
+  needs work, but the improvement is applied automatically -- the prompt
+  is NOT blocked and there is no accept/reject step. UserPromptSubmit
+  hooks cannot replace the prompt text (only block it or add context --
+  checked against the hooks docs 2026-08-10), and the session model
+  already has the full repo and conversation in context -- strictly more
+  than gather_context can scrape together, from a strictly stronger
+  model than the local rewriter. So auto mode calls no LLM at all: it
+  injects an `additionalContext` directive telling the session model
+  itself to refine the prompt (scope, output shape, tables/visuals for
+  list-shaped answers) and answer the refined version, opening its reply
+  with a one-line "Refined:" statement so the user sees what it ran
+  with. Near-zero latency, no dependency on the local LLM being up. No
+  once-per-session gate: auto never interrupts, so there is no nag cost
+  to ration -- every triggered prompt gets improved.
 - "always": every UserPromptSubmit is blocked and rewritten, regardless of
   quality or session history -- an explicit opt-in, since it adds LLM
   latency to every prompt. If the LLM is unreachable, the prompt is let
@@ -296,23 +301,39 @@ def _block_reason(rewritten: str) -> str:
     )
 
 
-def _auto_apply_response(rewritten: str) -> dict:
-    """Auto mode's whole trick: UserPromptSubmit can't replace the prompt
-    text (only block, or add context -- hooks docs, 2026-08-10), so the
-    rewrite is injected as additionalContext declared authoritative, and
-    the systemMessage shows the user what was applied."""
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
-            "additionalContext": (
-                "prompt-coach auto-rewrite: the user has automatic prompt "
-                "improvement enabled. The refined version below is the "
-                "authoritative form of their request -- answer it, not the "
-                "raw prompt above:\n\n" + rewritten
-            ),
-        },
-        "systemMessage": "prompt-coach auto-applied a rewrite:\n\n" + rewritten,
-    }
+# Auto mode's whole trick: UserPromptSubmit can't replace the prompt text
+# (only block, or add context -- hooks docs, 2026-08-10), and the session
+# model already holds the full repo/conversation context -- strictly more
+# than gather_context's excerpts -- and is strictly stronger than the local
+# rewrite model. So auto mode calls no LLM at all: it injects a directive
+# telling the session model itself to refine the prompt before answering
+# (2026-08-10, second pass -- the first cut called the local LLM here and
+# its rewrites were both slower and worse-grounded than this).
+_AUTO_RESPONSE = {
+    "hookSpecificOutput": {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": (
+            "prompt-coach auto-improve: the user has automatic prompt "
+            "improvement enabled, and this prompt tripped a weak-prompt "
+            "trigger (vague scope or no output shape). Before answering, "
+            "silently rewrite it into the clearer, better-scoped request "
+            "the user most plausibly meant, grounded in this project and "
+            "conversation: pin down scope and constraints if the ask is "
+            "broad; decide the output format if none is stated -- and if "
+            "the answer is naturally a list or enumeration, present it as "
+            "a table, or as a chart/diagram when the items have "
+            "relationships or proportions (this user parses tables and "
+            "visuals far better than prose bullets). Do not invent "
+            "requirements beyond the plausible intent. Begin your reply "
+            "with one line stating the refined request you are answering "
+            "(prefixed 'Refined:'), then answer that refined version."
+        ),
+    },
+    "systemMessage": (
+        "prompt-coach: weak-prompt trigger fired -- the model has been "
+        "asked to refine this prompt before answering (auto mode)."
+    ),
+}
 
 
 def _pending_path(cache_dir: Path) -> Path:
@@ -436,7 +457,8 @@ def build_response(payload: dict, cfg: Config) -> dict:
     """The one function the CLI calls: dispatches on `hook_event_name` and
     the resolved nudge mode (global `cfg.nudge.mode`, or a per-directory
     override -- see `_resolve_mode`). Handles Claude Code's UserPromptSubmit
-    (block-and-rewrite in coach/always, auto-apply in auto) and Stop
+    (block-and-rewrite in coach/always, LLM-free self-improve directive
+    in auto) and Stop
     (tip-only, coach mode only), plus Hermes's `pre_llm_call` (tip-only
     always -- see `_hermes_tip_response`)."""
     if payload.get("hook_event_name") == "pre_llm_call":
@@ -468,19 +490,10 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if mode == "auto":
         # Same calibrated triggers as coach (and _tip_for already screens
         # out machine prompts), but no once-per-session gate: auto never
-        # interrupts, so there's no nag cost to ration.
-        tip = _tip_for(prompt)
-        if tip is None:
-            return {}
-        llm = _make_llm(cfg)
-        rewritten = rewrite_prompt(prompt, llm, context=gather_context(payload)) if llm else None
-        if rewritten is not None:
-            return _auto_apply_response(rewritten)
-        # LLM unreachable/failed: degrade to the coach-style gated tip.
-        if session_id in _load_nudged_sessions(cfg.cache_dir):
-            return {}
-        _record_nudge(cfg.cache_dir, session_id)
-        return {"systemMessage": tip}
+        # interrupts, so there's no nag cost to ration. No LLM call either
+        # (see _AUTO_RESPONSE), so this path is near-free and never needs
+        # a degraded fallback.
+        return _AUTO_RESPONSE if _tip_for(prompt) is not None else {}
 
     if mode == "always":
         if _is_machine_prompt(prompt):

@@ -50,14 +50,13 @@ class StoresConfig:
 # "coach": today's default -- only the calibrated weak-prompt triggers fire,
 #   at most once per session, and the hook blocks with an LLM rewrite offered
 #   (falls back to the old non-blocking tip if the LLM is unreachable).
-# "auto": same calibrated triggers as coach, but the rewrite is applied
-#   automatically -- no block, no accept/reject. UserPromptSubmit hooks
-#   cannot replace the prompt text (checked against the hooks docs
-#   2026-08-10), so the rewrite is injected as additionalContext marked as
-#   the authoritative version, with a systemMessage showing what happened.
+# "auto": same calibrated triggers as coach, but the improvement is applied
+#   automatically -- no block, no accept/reject, and no LLM call: the hook
+#   injects an additionalContext directive telling the session model itself
+#   to refine the prompt before answering (it has more context and a
+#   stronger model than any local rewriter -- see nudge.py's docstring).
 #   No once-per-session gate: there's no interruption to ration, so every
-#   triggered prompt gets improved. Falls back to the coach-style gated tip
-#   if the LLM is unreachable.
+#   triggered prompt gets improved. Near-zero latency.
 # "always": every UserPromptSubmit is blocked and rewritten by the LLM,
 #   regardless of quality or session history -- an explicit opt-in, since it
 #   adds LLM latency to every single prompt. If the LLM is unreachable, the

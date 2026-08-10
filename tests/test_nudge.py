@@ -210,51 +210,43 @@ class TestBuildResponseAlwaysMode:
 
 
 class TestBuildResponseAutoMode:
-    """Auto mode: coach's triggers decide, but the rewrite is applied
-    without asking -- injected as authoritative additionalContext (hooks
-    can't replace the prompt text) plus a visible systemMessage. Never
-    blocks."""
+    """Auto mode: coach's triggers decide, but the improvement is applied
+    without asking -- an LLM-free additionalContext directive telling the
+    session model itself to refine the prompt before answering. Never
+    blocks, never calls the local LLM."""
 
-    def _with_llm(self, monkeypatch, rewrite="REWRITTEN"):
-        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
-        monkeypatch.setattr(
-            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: rewrite
-        )
-
-    def test_triggered_prompt_gets_context_injection_not_block(self, tmp_path, monkeypatch):
-        self._with_llm(monkeypatch)
-        cfg = make_cfg(tmp_path, mode="auto")
+    def test_triggered_prompt_gets_self_improve_directive_not_block(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="auto")  # LLM unreachable -- and never needed
         resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
         assert "decision" not in resp
         hso = resp["hookSpecificOutput"]
         assert hso["hookEventName"] == "UserPromptSubmit"
-        assert "REWRITTEN" in hso["additionalContext"]
-        assert "authoritative" in hso["additionalContext"]
-        assert "REWRITTEN" in resp["systemMessage"]
+        assert "rewrite" in hso["additionalContext"]
+        assert "Refined:" in hso["additionalContext"]
+        assert "table" in hso["additionalContext"]  # list-shaped answers steered to tables
+        assert "systemMessage" in resp
 
-    def test_untriggered_prompt_passes_untouched(self, tmp_path, monkeypatch):
-        self._with_llm(monkeypatch)
+    def test_never_calls_the_llm(self, tmp_path, monkeypatch):
+        def boom(cfg):
+            raise AssertionError("auto mode must not construct an LLM client")
+
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", boom)
+        cfg = make_cfg(tmp_path, mode="auto")
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert "hookSpecificOutput" in resp
+
+    def test_untriggered_prompt_passes_untouched(self, tmp_path):
         cfg = make_cfg(tmp_path, mode="auto")
         assert build_response({"prompt": SHORT_ORDINARY, "session_id": "s1"}, cfg) == {}
         assert build_response({"prompt": LONG_STRONG, "session_id": "s1"}, cfg) == {}
 
-    def test_no_once_per_session_gate_when_rewriting(self, tmp_path, monkeypatch):
-        self._with_llm(monkeypatch)
+    def test_no_once_per_session_gate(self, tmp_path):
         cfg = make_cfg(tmp_path, mode="auto")
         payload = {"prompt": LONG_WEAK, "session_id": "s1"}
         assert "hookSpecificOutput" in build_response(payload, cfg)
         assert "hookSpecificOutput" in build_response(payload, cfg)  # fires again, no gate
 
-    def test_llm_unreachable_degrades_to_gated_tip(self, tmp_path):
-        cfg = make_cfg(tmp_path, mode="auto")
-        payload = {"prompt": LONG_WEAK, "session_id": "s1"}
-        first = build_response(payload, cfg)
-        assert "systemMessage" in first
-        assert "hookSpecificOutput" not in first
-        assert build_response(payload, cfg) == {}  # tip fallback is once per session
-
-    def test_machine_prompt_not_rewritten(self, tmp_path, monkeypatch):
-        self._with_llm(monkeypatch)
+    def test_machine_prompt_not_improved(self, tmp_path):
         cfg = make_cfg(tmp_path, mode="auto")
         machine = "<task-notification>agent finished</task-notification>" + " pad" * 60
         assert build_response({"prompt": machine, "session_id": "s1"}, cfg) == {}
