@@ -1,7 +1,38 @@
 # Project Status - prompt-coach
-Last updated: 2026-08-07 by Claude (Sonnet 5): nudge blocks are now
-resolvable via /coach-accept and /coach-original slash commands instead
-of copy-paste. 269 tests, up from 260. Reinstalled binary verified live.
+Last updated: 2026-08-10 by Claude (Fable 5): new "auto" nudge mode --
+weak prompts are improved automatically, no accept/reject step. 275
+tests. Installed, enabled for Alistair (global mode = "auto"), verified
+live.
+
+## "auto" nudge mode: hands-off prompt improvement (2026-08-10)
+
+Alistair wanted the improvement loop hands-off: when the calibrated
+triggers say a prompt needs work, improve it and send it on -- no
+block, no /coach-accept. DECISIONS.md (2026-08-10, two entries) has
+the full detail, including the same-session pivot. Shipped:
+- `nudge.mode = "auto"` (config.py `NUDGE_MODES`): same calibrated
+  triggers as coach, no once-per-session gate (auto never interrupts,
+  so there's no nag cost to ration).
+- Mechanism: UserPromptSubmit hooks can't replace prompt text
+  (re-verified against the hook docs), and the first cut -- local-LLM
+  rewrite injected as authoritative additionalContext -- was slower
+  and worse-grounded than the session model itself. So auto is
+  LLM-free: `_AUTO_RESPONSE` injects a directive telling the session
+  model to silently refine the prompt (scope, output shape, tables for
+  list-shaped answers, charts/diagrams for relationships/proportions)
+  and open its reply with a one-line "Refined:" receipt. Hook latency
+  ~0.5s (Python startup only); works with the desktop off.
+- Two user-visible indications per firing: the hook's systemMessage at
+  submit time (deterministic) and the "Refined:" line in the reply
+  (directive-following, near-always).
+- `_REWRITE_SYSTEM` (still used by coach/always) now also steers
+  list-shaped answers toward tables/visuals.
+- 275 tests: `TestBuildResponseAutoMode` (including a guard that auto
+  never constructs an LLM client), config round-trip. ruff/black clean.
+- Deployed: reinstalled via `uv tool install --force .`, global config
+  flipped to `mode = "auto"` (email-client dir override still "off"),
+  verified live against the installed binary (trigger fires, ordinary
+  prompts pass untouched).
 
 ## Accept/reject slash commands for nudge blocks (2026-08-07)
 
