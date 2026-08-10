@@ -1186,3 +1186,16 @@ classifiable, and the model-fit/nudge-keyword thresholds were checked
 against that real data and found already well-calibrated -- no changes
 made, the "no change needed" finding recorded in DECISIONS.md rather than
 left ambiguous for a future session to re-litigate.
+
+**17.6 "auto" nudge mode + table/visual output steering** (2026-08-10):
+`nudge.mode = "auto"` applies the LLM rewrite automatically -- same
+calibrated triggers as coach decide, but instead of blocking with an
+accept/reject choice, the rewrite is injected as authoritative
+`additionalContext` (UserPromptSubmit hooks cannot replace prompt text;
+re-verified against the hook docs) with a `systemMessage` showing what
+was applied. No once-per-session gate (nothing interrupts, so nothing
+to ration); LLM-unreachable degrades to the coach-style gated tip;
+Stop and Hermes paths unchanged. `_REWRITE_SYSTEM` also now steers
+list-shaped answers toward tables (or charts/diagrams when items have
+relationships/proportions) in every mode. 276 tests (up from 269).
+See DECISIONS.md 2026-08-10.

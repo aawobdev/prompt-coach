@@ -556,11 +556,12 @@ def nudge():
     """Hook target for Claude Code (UserPromptSubmit + Stop) and Hermes
     (pre_llm_call shell hook, tip-only -- see nudge.py's module docstring):
     prints a hook-response JSON to stdout, dispatching on the payload's
-    hook_event_name. Mode ("coach"/"always"/"off") comes from config -- see
-    nudge.py's module docstring. No store sync. In Claude Code's "coach"/
-    "always" mode this may call the local LLM (bounded by its own short
-    timeout, not the 120s default) and block the prompt; must never raise --
-    a hook failure would block every prompt or response."""
+    hook_event_name. Mode ("coach"/"auto"/"always"/"off") comes from config
+    -- see nudge.py's module docstring. No store sync. In Claude Code's
+    "coach"/"auto"/"always" modes this may call the local LLM (bounded by
+    its own short timeout, not the 120s default) and block or auto-rewrite
+    the prompt; must never raise -- a hook failure would block every prompt
+    or response."""
     import json as _json
 
     from prompt_coach.nudge import build_response

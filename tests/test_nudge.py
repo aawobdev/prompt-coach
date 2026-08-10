@@ -209,6 +209,71 @@ class TestBuildResponseAlwaysMode:
         assert resp == {}  # already caught pre-submission; nothing left for Stop to do
 
 
+class TestBuildResponseAutoMode:
+    """Auto mode: coach's triggers decide, but the rewrite is applied
+    without asking -- injected as authoritative additionalContext (hooks
+    can't replace the prompt text) plus a visible systemMessage. Never
+    blocks."""
+
+    def _with_llm(self, monkeypatch, rewrite="REWRITTEN"):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: rewrite
+        )
+
+    def test_triggered_prompt_gets_context_injection_not_block(self, tmp_path, monkeypatch):
+        self._with_llm(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto")
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert "decision" not in resp
+        hso = resp["hookSpecificOutput"]
+        assert hso["hookEventName"] == "UserPromptSubmit"
+        assert "REWRITTEN" in hso["additionalContext"]
+        assert "authoritative" in hso["additionalContext"]
+        assert "REWRITTEN" in resp["systemMessage"]
+
+    def test_untriggered_prompt_passes_untouched(self, tmp_path, monkeypatch):
+        self._with_llm(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto")
+        assert build_response({"prompt": SHORT_ORDINARY, "session_id": "s1"}, cfg) == {}
+        assert build_response({"prompt": LONG_STRONG, "session_id": "s1"}, cfg) == {}
+
+    def test_no_once_per_session_gate_when_rewriting(self, tmp_path, monkeypatch):
+        self._with_llm(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto")
+        payload = {"prompt": LONG_WEAK, "session_id": "s1"}
+        assert "hookSpecificOutput" in build_response(payload, cfg)
+        assert "hookSpecificOutput" in build_response(payload, cfg)  # fires again, no gate
+
+    def test_llm_unreachable_degrades_to_gated_tip(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="auto")
+        payload = {"prompt": LONG_WEAK, "session_id": "s1"}
+        first = build_response(payload, cfg)
+        assert "systemMessage" in first
+        assert "hookSpecificOutput" not in first
+        assert build_response(payload, cfg) == {}  # tip fallback is once per session
+
+    def test_machine_prompt_not_rewritten(self, tmp_path, monkeypatch):
+        self._with_llm(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto")
+        machine = "<task-notification>agent finished</task-notification>" + " pad" * 60
+        assert build_response({"prompt": machine, "session_id": "s1"}, cfg) == {}
+
+    def test_stop_event_does_nothing_in_auto_mode(self, tmp_path):
+        transcript = tmp_path / "sess.jsonl"
+        transcript.write_text(_user_line(LONG_WEAK) + "\n")
+        cfg = make_cfg(tmp_path, mode="auto")
+        resp = build_response(
+            {
+                "hook_event_name": "Stop",
+                "session_id": "s1",
+                "transcript_path": str(transcript),
+            },
+            cfg,
+        )
+        assert resp == {}  # weak prompts are already caught pre-submission
+
+
 class TestPendingRewrite:
     """/coach-accept and /coach-original (~/.claude/commands/, not part of
     this package) resend one side of a block via `nudge-consume`, which

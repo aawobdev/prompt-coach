@@ -50,12 +50,20 @@ class StoresConfig:
 # "coach": today's default -- only the calibrated weak-prompt triggers fire,
 #   at most once per session, and the hook blocks with an LLM rewrite offered
 #   (falls back to the old non-blocking tip if the LLM is unreachable).
+# "auto": same calibrated triggers as coach, but the rewrite is applied
+#   automatically -- no block, no accept/reject. UserPromptSubmit hooks
+#   cannot replace the prompt text (checked against the hooks docs
+#   2026-08-10), so the rewrite is injected as additionalContext marked as
+#   the authoritative version, with a systemMessage showing what happened.
+#   No once-per-session gate: there's no interruption to ration, so every
+#   triggered prompt gets improved. Falls back to the coach-style gated tip
+#   if the LLM is unreachable.
 # "always": every UserPromptSubmit is blocked and rewritten by the LLM,
 #   regardless of quality or session history -- an explicit opt-in, since it
 #   adds LLM latency to every single prompt. If the LLM is unreachable, the
 #   prompt is let through unmodified rather than blocking with no way out.
 # "off": nudge never fires (UserPromptSubmit or Stop).
-NUDGE_MODES = ("coach", "always", "off")
+NUDGE_MODES = ("coach", "auto", "always", "off")
 DEFAULT_NUDGE_MODE = "coach"
 
 

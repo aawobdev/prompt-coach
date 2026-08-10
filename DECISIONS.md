@@ -902,3 +902,43 @@ via `uv tool install --force .` and verified live -- a real block
 against the desktop Ollama model, then `nudge-consume` for both
 `rewritten` and `original` -- against the installed binary, not just
 `uv run`.
+
+## 2026-08-10 - "auto" nudge mode: rewrite applied automatically via additionalContext, no accept/reject
+
+**Trigger**: Alistair wants the improvement loop to be hands-off: when
+the calibrated triggers decide a prompt needs work, apply the rewrite
+automatically and send it on -- no block, no /coach-accept step. An
+opt-in for power/lazy users, not a new default. He also wants rewrites
+to steer list-shaped answers toward tables or visuals, which he can
+parse far more easily than prose bullets.
+**Decision**: Re-checked the current hook docs before designing (same
+discipline as the 2026-08-07 entry): `UserPromptSubmit` still cannot
+replace the prompt text -- its only output levers are block/continue,
+`reason`/`systemMessage`, and `additionalContext`. So "auto" mode is
+built on context injection: the LLM rewrite (grounded in cwd/project
+docs/session history via the existing `gather_context`) is returned as
+`hookSpecificOutput.additionalContext`, prefixed with an explicit
+statement that the refined version is the authoritative form of the
+request, plus a `systemMessage` so the user always sees what was
+applied. The model reads both original and rewrite; in practice the
+directive dominates. Trigger policy: same calibrated coach triggers
+(the algorithm decides), but no once-per-session gate -- auto never
+interrupts, so there is no nag cost to ration, and every triggered
+prompt gets improved. LLM unreachable degrades to the coach-style
+gated tip. Stop stays coach-only (auto catches weak prompts
+pre-submission). Hermes `pre_llm_call` still collapses to
+deterministic tip-only -- its context injection could carry an
+auto-rewrite later, but not until the inline-LLM latency is proven
+inside Hermes's hook budget. Separately, `_REWRITE_SYSTEM` gained one
+rule for all modes: if the answer would naturally be a list/enumeration,
+the rewrite asks for a table -- or a chart/diagram when items have
+relationships or proportions -- rather than prose bullets.
+**Alternatives considered**: blocking and auto-resending the rewrite
+via the skip_next machinery -- rejected, a block with no user action
+has no resend path (slash commands are user-initiated); patching the
+transcript is not a thing hooks can do.
+**Affects**: config.py (`NUDGE_MODES` + "auto"), nudge.py
+(`_auto_apply_response`, auto branch in `build_response`, docstrings,
+`_REWRITE_SYSTEM`), cli.py (nudge docstring), test_nudge.py
+(`TestBuildResponseAutoMode`), test_config.py. 276 tests (up from 269).
+**Decided by**: Alistair, built same session, 2026-08-10.

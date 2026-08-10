@@ -44,6 +44,12 @@ def test_unknown_enabled_store_raises(clean_env, monkeypatch, tmp_path):
         load_config(tmp_path / "nope.toml")
 
 
+def test_auto_nudge_mode_is_accepted(clean_env, tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[nudge]\nmode = "auto"\n')
+    assert load_config(path).nudge.mode == "auto"
+
+
 def test_nudge_dir_overrides_from_toml(clean_env, tmp_path):
     path = tmp_path / "config.toml"
     path.write_text('[nudge]\nmode = "coach"\n\n[nudge.dir_overrides]\n"/x/y" = "off"\n')

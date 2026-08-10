@@ -7,6 +7,16 @@
   consume_pending_rewrite below; these are ~/.claude/commands/ slash
   commands, not part of this package). When the LLM isn't reachable, it
   degrades to the old non-blocking systemMessage tip.
+- "auto": the same calibrated triggers as coach decide whether a prompt
+  needs work, but the rewrite is applied automatically -- the prompt is
+  NOT blocked and there is no accept/reject step. UserPromptSubmit hooks
+  cannot replace the prompt text (only block it or add context -- checked
+  against the hooks docs 2026-08-10), so the rewrite rides in as
+  `additionalContext` explicitly marked as the authoritative version of
+  the request, plus a `systemMessage` so the user sees what was applied.
+  No once-per-session gate: auto mode never interrupts, so there is no
+  nag cost to ration -- every triggered prompt gets improved. If the LLM
+  is unreachable it degrades to the coach-style gated tip.
 - "always": every UserPromptSubmit is blocked and rewritten, regardless of
   quality or session history -- an explicit opt-in, since it adds LLM
   latency to every prompt. If the LLM is unreachable, the prompt is let
@@ -16,9 +26,9 @@
 Only UserPromptSubmit can block (Claude Code has no equivalent for Stop --
 `decision: block` there means "keep going," not "don't send" -- so it would
 mean something different, not the same thing later). Stop keeps the old
-tip-only behavior, and only in "coach" mode: in "always" mode every prompt
-is already caught pre-submission, so there's nothing left for Stop to catch
-after the fact.
+tip-only behavior, and only in "coach" mode: in "auto" and "always" modes
+every weak prompt is already caught pre-submission, so there's nothing left
+for Stop to catch after the fact.
 
 Calibrated against the real corpus (see DECISIONS.md): 77-97% of substantial
 human prompts already fail the A5/A6 rubric rules, so firing on every rule
@@ -41,7 +51,10 @@ is deterministic tip-only (same calibrated triggers, same once-per-session
 gate) regardless of nudge mode -- "off" still disables it entirely, but
 "always" has no meaningful translation here (there's nothing to
 "always block and rewrite"), so it collapses to the same coach-style
-behavior as "coach".
+behavior as "coach". "auto" collapses the same way for now: pre_llm_call's
+context injection could in principle carry an auto-rewrite, but that path
+stays deterministic-only until the inline-LLM latency is proven acceptable
+inside Hermes's hook budget.
 """
 
 from __future__ import annotations
@@ -177,7 +190,11 @@ _REWRITE_SYSTEM = (
     "You rewrite a user's prompt to a coding assistant so it is clearer, "
     "more specific, and better structured -- state an output format or add "
     "a short example if one is missing, name scope/constraints if the ask "
-    "is broad and open-ended. When a SESSION CONTEXT block is provided "
+    "is broad and open-ended. If the answer would naturally be a list or "
+    "enumeration (options, comparisons, findings, inventories), have the "
+    "rewrite ask for it as a table -- or a visual (chart/diagram) when the "
+    "items have relationships or proportions -- rather than prose bullets. "
+    "When a SESSION CONTEXT block is provided "
     "(working directory, project docs, earlier prompts), ground the rewrite "
     "in it: use the project's real names, paths, and terminology instead of "
     "generic placeholders, and read ambiguous references against what the "
@@ -277,6 +294,25 @@ def _block_reason(rewritten: str) -> str:
         "Run /coach-accept to send the rewrite, or /coach-original to send "
         "your prompt as-is."
     )
+
+
+def _auto_apply_response(rewritten: str) -> dict:
+    """Auto mode's whole trick: UserPromptSubmit can't replace the prompt
+    text (only block, or add context -- hooks docs, 2026-08-10), so the
+    rewrite is injected as additionalContext declared authoritative, and
+    the systemMessage shows the user what was applied."""
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": (
+                "prompt-coach auto-rewrite: the user has automatic prompt "
+                "improvement enabled. The refined version below is the "
+                "authoritative form of their request -- answer it, not the "
+                "raw prompt above:\n\n" + rewritten
+            ),
+        },
+        "systemMessage": "prompt-coach auto-applied a rewrite:\n\n" + rewritten,
+    }
 
 
 def _pending_path(cache_dir: Path) -> Path:
@@ -400,8 +436,9 @@ def build_response(payload: dict, cfg: Config) -> dict:
     """The one function the CLI calls: dispatches on `hook_event_name` and
     the resolved nudge mode (global `cfg.nudge.mode`, or a per-directory
     override -- see `_resolve_mode`). Handles Claude Code's UserPromptSubmit
-    (which can block-and-rewrite) and Stop (tip-only, coach mode only), plus
-    Hermes's `pre_llm_call` (tip-only always -- see `_hermes_tip_response`)."""
+    (block-and-rewrite in coach/always, auto-apply in auto) and Stop
+    (tip-only, coach mode only), plus Hermes's `pre_llm_call` (tip-only
+    always -- see `_hermes_tip_response`)."""
     if payload.get("hook_event_name") == "pre_llm_call":
         return _hermes_tip_response(payload, cfg)
 
@@ -427,6 +464,23 @@ def build_response(payload: dict, cfg: Config) -> dict:
         # (consume_pending_rewrite set this flag) -- let it through as-is,
         # regardless of mode, rather than immediately holding it back again.
         return {}
+
+    if mode == "auto":
+        # Same calibrated triggers as coach (and _tip_for already screens
+        # out machine prompts), but no once-per-session gate: auto never
+        # interrupts, so there's no nag cost to ration.
+        tip = _tip_for(prompt)
+        if tip is None:
+            return {}
+        llm = _make_llm(cfg)
+        rewritten = rewrite_prompt(prompt, llm, context=gather_context(payload)) if llm else None
+        if rewritten is not None:
+            return _auto_apply_response(rewritten)
+        # LLM unreachable/failed: degrade to the coach-style gated tip.
+        if session_id in _load_nudged_sessions(cfg.cache_dir):
+            return {}
+        _record_nudge(cfg.cache_dir, session_id)
+        return {"systemMessage": tip}
 
     if mode == "always":
         if _is_machine_prompt(prompt):
