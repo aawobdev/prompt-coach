@@ -33,6 +33,56 @@ _NARROW_WIDTH = 100  # below this, dash stacks panels full-width instead of side
 _MAX_VOLUME_ROWS = 3  # below _NARROW_WIDTH, collapse the rest into "+ N more…" (1a)
 _MAX_FIT_ROWS = 10  # model-fit findings table caps here, "+ N more" for the rest
 
+# Fixed render width for the HTML export -- wide enough for the side-by-side
+# (non-narrow) panel layout, so the static page matches a roomy terminal rather
+# than whatever the exporting shell happens to be.
+HTML_WIDTH = 120
+
+# Wrapper page for `dash --html`. Self-contained: rich inlines the span styles, so
+# there are no external assets and the file opens straight from disk. rich fills
+# {code}, {stylesheet}, {foreground}, {background} via str.format; the timestamp is
+# a non-brace token so it survives that format() call and is substituted after.
+DASH_HTML_FORMAT = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prompt-coach dashboard</title>
+<style>
+body {{
+    margin: 0;
+    padding: 2rem 1rem;
+    background: {background};
+    color: {foreground};
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    display: flex;
+    justify-content: center;
+}}
+.wrap {{ width: fit-content; max-width: 100%; }}
+.meta {{
+    opacity: 0.6;
+    font-size: 0.8rem;
+    margin: 0 0 1rem;
+    text-align: right;
+}}
+pre {{
+    margin: 0;
+    line-height: 1.25;
+    font-size: 14px;
+    overflow-x: auto;
+}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<p class="meta">generated %%GENERATED%% · deterministic, no prompt content</p>
+<pre><code>{code}</code></pre>
+</div>
+</body>
+</html>
+"""
+
 
 def sparkline(values: Sequence[int]) -> str:
     if not values:

@@ -266,8 +266,36 @@ def test_cache_clear(env):
     assert "prompts: 0" in info.output
 
 
-def test_serve_is_phase_2(env):
-    assert runner.invoke(app, ["serve"]).exit_code == 1
+def test_serve_dashboard_server_responds(env):
+    """Build the server (not the blocking `serve` command), hit it in a thread,
+    and confirm it returns the standalone dashboard page with no prompt content."""
+    import threading
+    import urllib.error
+    import urllib.request
+
+    from prompt_coach.cli import _build_dash_server, default_stores, open_cache
+    from prompt_coach.config import load_config
+
+    cfg = load_config()
+    open_cache(cfg).sync(default_stores(cfg))  # populate the cache first
+    server = _build_dash_server(cfg, "127.0.0.1", 0, "12w", {})
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        with urllib.request.urlopen(base + "/", timeout=5) as resp:
+            assert resp.status == 200
+            assert resp.headers["Content-Type"] == "text/html; charset=utf-8"
+            page = resp.read().decode("utf-8")
+        assert page.startswith("<!DOCTYPE html>")
+        assert "Rubric scorecard" in page
+        assert "nginx" not in page  # same no-content rule as the terminal dash
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(base + "/favicon.ico", timeout=5)
+        assert caught.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_dash_smoke(env):
@@ -280,6 +308,32 @@ def test_dash_quiet_week_is_not_an_error(env):
     result = runner.invoke(app, ["dash", "--plain", "--since", "2030-01-01"])
     assert result.exit_code == 0
     assert "quiet week" in result.output
+
+
+def test_dash_html_writes_standalone_page(env, tmp_path):
+    out = tmp_path / "dash.html"
+    result = runner.invoke(app, ["dash", "--html", str(out)])
+    assert result.exit_code == 0
+    assert out.exists()
+    page = out.read_text(encoding="utf-8")
+    # Self-contained page: real doctype, our panels, no external asset refs, and
+    # the format() placeholders/timestamp token are all resolved.
+    assert page.startswith("<!DOCTYPE html>")
+    assert "Rubric scorecard" in page
+    assert "src=" not in page and "http://" not in page and "https://" not in page
+    assert "{code}" not in page and "%%GENERATED%%" not in page
+    assert "generated " in page
+    assert "nginx" not in page  # same no-content rule as the terminal dash
+    # HTML mode writes only the file; the dashboard is not dumped to stdout.
+    assert "Rubric scorecard" not in result.output
+
+
+def test_dash_html_quiet_week_still_writes_page(env, tmp_path):
+    out = tmp_path / "empty.html"
+    result = runner.invoke(app, ["dash", "--html", str(out), "--since", "2030-01-01"])
+    assert result.exit_code == 0
+    assert out.exists()
+    assert "quiet week" in out.read_text(encoding="utf-8")
 
 
 def test_stats_quiet_week_is_not_an_error(env):

@@ -418,6 +418,9 @@ def dash(
     no_sync: bool = typer.Option(
         False, "--no-sync", help="Skip store sync, render from cache as-is"
     ),
+    html: Path | None = typer.Option(
+        None, "--html", help="Write the dashboard to a self-contained HTML file instead of stdout"
+    ),
 ):
     """Terminal dashboard: volume trends, segments, rubric scores. No LLM, no content."""
     from rich.console import Console
@@ -434,6 +437,14 @@ def dash(
     stores_failed: dict[str, str] = {}
     if not no_sync:
         stores_failed = sync_with_progress(cache, cfg).stores_failed
+    # --html renders the same dashboard to a standalone page instead of the
+    # terminal; the shared renderer is also what `serve` responds with.
+    if html is not None:
+        html.write_text(
+            _render_dash_html(cfg, cache, since, stores_failed=stores_failed), encoding="utf-8"
+        )
+        typer.echo(f"Wrote {html}", err=True)
+        return
     since_dt = parse_since(since)
     prompts = cache.prompts(since=since_dt)
     console = Console(force_terminal=False, no_color=True) if plain else Console()
@@ -463,6 +474,65 @@ def dash(
         plain=plain,
     )
     console.print(renderable)
+
+
+def _render_dash_html(
+    cfg: Config, cache: CacheDB, since: str | None, *, stores_failed: dict[str, str] | None = None
+) -> str:
+    """Render the dashboard from the cache as-is and return a self-contained HTML
+    page (inline styles, no external assets -- opens straight from disk). Does not
+    sync: the caller decides when to refresh the cache. Reuses rich's exporter, so
+    the page carries no prompt content the terminal dash wouldn't. Shared by
+    `dash --html` (write to file) and `serve` (respond per request)."""
+    import io
+
+    from rich.console import Console
+    from rich.terminal_theme import MONOKAI
+    from rich.text import Text
+
+    from prompt_coach.analysis.docs import analyse_docs
+    from prompt_coach.analysis.metrics import compute_metrics
+    from prompt_coach.analysis.model_fit import detect_mismatches
+    from prompt_coach.analysis.rubric import run_rubric
+    from prompt_coach.report.dash import DASH_HTML_FORMAT, HTML_WIDTH, build_dash, weekly_volumes
+
+    stores_failed = stores_failed or {}
+    since_dt = parse_since(since)
+    prompts = cache.prompts(since=since_dt)
+    label = _since_label(since, since_dt)
+    # Fixed-width color console backed by an in-memory buffer, not stdout.
+    console = Console(record=True, width=HTML_WIDTH, force_terminal=True, file=io.StringIO())
+    if not prompts:
+        header, body = _empty_state(cache, since_dt, label)
+        console.print(Text.assemble(("prompt-coach", "bold cyan"), (f" · {header}", "dim")))
+        console.print(Text(body, style="dim"))
+    else:
+        for store, reason in stores_failed.items():
+            console.print(Text(f"⚠ {store}: sync failed ({reason})", style="yellow"))
+        store_counts = {
+            k: v
+            for k, v in cache.counts(since=since_dt).items()
+            if k not in ("prompts", "sessions")
+        }
+        console.print(
+            build_dash(
+                metrics=compute_metrics(prompts),
+                rubric=run_rubric(prompts, None, cache),
+                volumes=weekly_volumes(prompts),
+                prompt_count=len(prompts),
+                session_count=len({f"{p.source}:{p.session_id}" for p in prompts}),
+                since_label=label,
+                store_count=len(store_counts),
+                stale_count=len(stores_failed),
+                docs=analyse_docs(prompts),
+                model_fit=detect_mismatches(prompts, cfg.model_fit.mode),
+                width=HTML_WIDTH,
+                plain=False,
+            )
+        )
+    generated = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+    html_text = console.export_html(theme=MONOKAI, inline_styles=True, code_format=DASH_HTML_FORMAT)
+    return html_text.replace("%%GENERATED%%", generated)
 
 
 @app.command()
@@ -596,11 +666,75 @@ def nudge_consume(
     typer.echo(text)
 
 
+def _build_dash_server(
+    cfg: Config, host: str, port: int, since: str | None, stores_failed: dict[str, str]
+):
+    """Build (but don't start) an HTTPServer that renders the dashboard on each GET
+    of `/`. Split out from `serve` so it can be started, hit, and shut down under
+    test without blocking. Re-opens the cache per request and re-renders from it, so
+    a browser refresh reflects whatever is in the cache now (no re-sync per hit)."""
+    import http.server
+
+    class _DashHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 (stdlib-defined name)
+            if self.path.split("?", 1)[0] not in ("/", "/index.html"):
+                self.send_error(404)
+                return
+            try:
+                page = _render_dash_html(
+                    cfg, open_cache(cfg), since, stores_failed=stores_failed
+                ).encode("utf-8")
+            except Exception as exc:  # one bad render must not kill the server
+                self.send_error(500, str(exc))
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
+
+        def log_message(self, *args):  # silence per-request stderr access logs
+            pass
+
+    return http.server.HTTPServer((host, port), _DashHandler)
+
+
 @app.command()
-def serve():
-    """Read-only HTTP API (not yet available)."""
-    typer.echo("serve is phase 2; not implemented yet.", err=True)
-    raise typer.Exit(1)
+def serve(
+    since: str | None = typer.Option("12w", "--since", help="Time range (default 12w)"),
+    port: int = typer.Option(0, "--port", help="Port to bind (default: an open one)"),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Don't open a browser"),
+    no_sync: bool = typer.Option(
+        False, "--no-sync", help="Skip the startup store sync, serve from cache as-is"
+    ),
+):
+    """Serve the dashboard on 127.0.0.1 and open it in a browser. Localhost only --
+    nothing leaves the machine. Syncs once at startup (unless --no-sync); after that
+    each page load re-renders from the cache, so refresh is instant. Ctrl-C to stop."""
+    import webbrowser
+
+    cfg = load_config()
+    stores_failed: dict[str, str] = {}
+    if not no_sync:
+        stores_failed = sync_with_progress(open_cache(cfg), cfg).stores_failed
+    try:
+        server = _build_dash_server(cfg, "127.0.0.1", port, since, stores_failed)
+    except OSError as exc:
+        typer.echo(f"Cannot bind 127.0.0.1:{port} ({exc}).", err=True)
+        raise typer.Exit(1) from exc
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    typer.echo(f"prompt-coach dashboard at {url}  (Ctrl-C to stop)", err=True)
+    if not no_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: S110 - headless box, no browser; URL is printed anyway
+            pass
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        typer.echo("\nstopped.", err=True)
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

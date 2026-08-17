@@ -1,5 +1,40 @@
 # Decisions & Changes - prompt-coach
 
+## 2026-08-17 - Web dashboard: reuse the terminal renderable, no web framework
+
+**Trigger**: pick-up item 9 (local web UI) / phase-3 "serve API". Alistair:
+"can't we just have a command that starts a web server and launches it in a
+browser?" -- after first agreeing to spike the static `dash --html` export.
+**Decision**: ship both, both built on the *existing* terminal dashboard
+renderable, zero new dependencies:
+- `dash --html <path>` serialises the dashboard with rich's own
+  `export_html` (record into an in-memory-buffered `Console`, `inline_styles`,
+  MONOKAI theme) into a self-contained page. Fixed `HTML_WIDTH=120` so the
+  page always gets the roomy side-by-side layout, not the exporting shell's
+  width. Wrapper page is `DASH_HTML_FORMAT`; the timestamp is a
+  `%%GENERATED%%` token substituted *after* rich's `str.format` (a `{brace}`
+  field would raise KeyError inside `export_html`).
+- `serve` uses stdlib `http.server` + `webbrowser`, binds `127.0.0.1` only,
+  syncs once at startup then re-renders from the cache per request.
+- One shared `_render_dash_html` feeds both; `_build_dash_server` returns the
+  HTTPServer without blocking so it's testable.
+**Why**: option (a) over (b) (Flask/FastAPI). The dashboard is already a
+deterministic renderable; rich exports it to HTML for free, so a web
+framework would be pure overhead for what "look at my dashboard in a browser"
+actually needs. localhost-only + no external assets keeps the zero-data-export
+guarantee intact (same rule as the LLM client). No per-request re-sync so a
+browser refresh stays instant instead of paying the ~20s /mnt/c Copilot walk
+every hit.
+**Limitation (accepted)**: static dashboard auto-served, not an interactive
+app -- no in-page `--since` picker or session drill-down. An in-page
+time-range dropdown via query params (cheap, no framework) is the flagged
+next step; option (b) only if that proves too limiting.
+**Affects**: cli.py (`dash --html`, `serve`, `_render_dash_html`,
+`_build_dash_server`), report/dash.py (`HTML_WIDTH`, `DASH_HTML_FORMAT`),
+pyproject.toml (S310 tests ignore), tests/test_cli.py (+3 tests, 278 total).
+**Decided by**: Alistair (chose "just start a server"); built by Claude
+(Opus 4.8), verified live (curl + threaded-server test).
+
 ## 2026-07-20 - Blueprint v2: store facts corrected against live systems
 
 **Trigger**: v1 blueprint (deepseek-v4-flash) claimed Hermes sessions live at

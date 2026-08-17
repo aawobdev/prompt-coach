@@ -1,8 +1,53 @@
 # Project Status - prompt-coach
-Last updated: 2026-08-10 by Claude (Fable 5): new "auto" nudge mode --
-weak prompts are improved automatically, no accept/reject step. 275
-tests. Installed, enabled for Alistair (global mode = "auto"), verified
-live.
+Last updated: 2026-08-17 by Claude (Opus 4.8): dashboard now has a web
+face -- `dash --html <file>` writes a self-contained page, and `serve`
+starts a localhost web server and opens it in a browser. 278 tests.
+
+## Web dashboard: `dash --html` + `serve` (2026-08-17)
+
+Closed pick-up item 9 (local web UI for insights) and the phase-3
+"serve API" candidate, taking option (a) from that item -- reuse the
+existing terminal dashboard's renderable rather than build a separate
+web stack. DECISIONS.md (2026-08-17) has the full reasoning. Shipped:
+- `dash --html <path>`: renders the dashboard into a fixed-width color
+  console (rich `record=True`, backed by an in-memory buffer so nothing
+  hits stdout) and serialises it with rich's own `export_html` into a
+  self-contained page (inline styles, MONOKAI theme, no external assets
+  -- opens straight from disk). `HTML_WIDTH=120` forces the roomy
+  side-by-side panel layout regardless of the exporting shell.
+  `DASH_HTML_FORMAT` in report/dash.py is the wrapper page; the
+  generated-at timestamp is a `%%GENERATED%%` token (not a `{brace}`
+  field) so it survives rich's `str.format` call and is substituted
+  after. Same privacy rule as the terminal dash -- counts/scores only,
+  zero prompt content (asserted in tests and confirmed on real data).
+- `serve`: stdlib only (`http.server` + `webbrowser`), zero new deps.
+  Binds `127.0.0.1` (same localhost-only rule as the LLM client),
+  syncs once at startup, then re-renders from the cache on every GET of
+  `/` so a browser refresh is instant (no per-hit /mnt/c re-sync).
+  Opens the browser automatically; degrades to just printing the URL on
+  a headless box. 404s anything but `/`; one bad render returns 500
+  rather than killing the server. Flags: `--since`, `--port` (0 = pick
+  an open one), `--no-browser`, `--no-sync`.
+- Refactor: both paths share one `_render_dash_html` helper so the file
+  export and the served page can't drift. The server is built by a
+  testable `_build_dash_server` that returns the HTTPServer without
+  calling `serve_forever`, so tests can start it in a thread, hit it,
+  and shut it down.
+- 278 tests (up from 275): `test_dash_html_writes_standalone_page`,
+  `test_dash_html_quiet_week_still_writes_page`,
+  `test_serve_dashboard_server_responds` (real threaded server + two
+  urllib fetches, asserts 200/headers/no-content/404). ruff/black clean
+  (S310 added to the tests per-file-ignore for the localhost fetch, S110
+  noqa on the headless webbrowser fallback), no em dashes.
+- Verified live: real `serve --no-sync` run, curl'd the page (200,
+  correct Content-Type, 8.9KB, panels present, 404 on other paths),
+  clean Ctrl-C shutdown.
+- **Known limitation (by design)**: this is the static dashboard
+  auto-served, not an interactive app -- no in-page `--since` picker or
+  session drill-down. Refresh reflects the current cache. An in-page
+  time-range dropdown via query params (cheap, no framework) is the
+  obvious next step if it's wanted; option (b), a full FastAPI app, only
+  if that turns out too limiting.
 
 ## "auto" nudge mode: hands-off prompt improvement (2026-08-10)
 
@@ -356,20 +401,19 @@ silently assumed.
    revisit extraction rules (the `## My request for Codex:` wrapper strip,
    the `plain`/`environment_context` kind split) once more real usage
    accumulates, especially non-VS-Code (raw terminal) sessions.
-7. Phase 3 candidates (blueprint section 15): trends over time, serve API,
-   OpenWebUI store, weekly coaching report via Hermes cron.
+7. Phase 3 candidates (blueprint section 15): trends over time, serve API
+   (**resolved 2026-08-17**, see below), OpenWebUI store, weekly coaching
+   report via Hermes cron.
 8. Doc-quality thresholds (`_SPARSE_WORDS=150`, `_STALE_DAYS=90`) are
    first-guess; tune once there's a project you'd actually flag.
-9. Local web UI for insights (raised 2026-07-22, not started): fills the
-   `serve` stub (`cli.py`, currently "phase 2; not implemented yet") and
-   the phase-3 "serve API" candidate above. Two options discussed:
-   (a) static HTML export - `prompt-coach dash --html report.html`,
-   reusing `dash.py`'s existing renderable data, zero new deps, no
-   long-running process; (b) local Flask/FastAPI server bound to
-   `127.0.0.1` only (same localhost-only rule as the LLM client) for live
-   filtering/session drill-down, more moving parts. Leaning towards
-   spiking (a) first since nothing here needs live updates - only build
-   (b) if the static page turns out too limiting. No decision made yet.
+9. **Resolved 2026-08-17**: local web UI shipped -- `dash --html <file>`
+   (static self-contained page) and `serve` (localhost web server that
+   opens it in a browser), both reusing the terminal dashboard's
+   renderable, zero new deps. Took option (a) over (b): no framework, the
+   static render auto-served covers "look at my dashboard in a browser".
+   Follow-on if wanted: an in-page `--since` dropdown via query params
+   (cheap), or option (b)'s full FastAPI app only if the static page turns
+   out too limiting. See the top-of-file entry and DECISIONS.md.
 
 ## Phase 2 task status
 
