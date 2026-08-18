@@ -79,6 +79,83 @@ uv run black --check .   # format
 uv run prompt-coach --help
 ```
 
+## Agent Integration (for LLM agents reading this)
+
+When a user asks about their prompting quality, streaks, scores, or the audit
+trail, use `prompt-coach` CLI commands with `--json` output and present the
+results conversationally:
+
+### Score a prompt on demand
+
+When the user is about to send a prompt and asks "is this any good?":
+
+```bash
+prompt-coach score "their prompt text" --json
+```
+
+Returns: `{"score": 75, "bonuses": [["Output format specified", 15], ...], "penalties": [...]}`
+
+Present it as a readable breakdown, e.g. "That prompt scores 75/100 — it's
+missing an output format and a worked example, which would give you more
+targeted results."
+
+### Show streaks and trends
+
+```bash
+prompt-coach streaks --json
+```
+
+Returns: `{"good_prompt_streak": 12, "no_intervention_streak": 8, "best_streak": 42}`
+
+### Audit trail (what got nudged/improved)
+
+```bash
+prompt-coach audit --since 7d --json             # summary by mode
+prompt-coach audit --since 7d --detail --json    # individual entries
+```
+
+### Coaching report
+
+```bash
+prompt-coach report --since 30d --no-llm         # text report (already human-readable)
+```
+
+### Quick stats
+
+```bash
+prompt-coach stats --since 30d                   # metrics overview
+```
+
+### Respond in the user's language
+
+If the user writes in a non-English language, present the output in the same
+language. Keep it concise — a score, a short breakdown, and one actionable
+suggestion is better than a wall of numbers.
+
+## Nudge modes
+
+The tool has three live nudge modes (plus "off"). When prompting someone about
+which mode to use:
+
+- **coach**: blocks weak prompts before they send, offers a rewrite. Best for
+  learning / deliberate improvement.
+- **auto**: silently improves weak prompts via a self-improve directive. Best
+  for speed — you see the refined prompt and the answer in one response.
+- **hint**: lets the prompt through, shows a tip after the response. Non-intrusive,
+  purely educational.
+- **always**: blocks and rewrites every prompt unconditionally. Explicit opt-in.
+- **off**: no intervention.
+
+Configure in `~/.config/prompt-coach/config.toml` under `[nudge] mode`.
+
+## Per-directory overrides
+
+```toml
+[nudge.dir_overrides]
+"/home/user/projects/my-app" = "coach"
+"/home/user/projects/scratch" = "off"
+```
+
 ## Conventions
 
 - **Folder names**: lowercase-hyphenated. No PascalCase, underscores, spaces.

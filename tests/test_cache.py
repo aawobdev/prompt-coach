@@ -228,3 +228,101 @@ def test_clear(cache):
     assert cache.counts()["prompts"] == 0
     assert cache.get_llm("k") is None
     assert cache.search("hello") == []
+
+
+class TestAuditLog:
+    def test_record_and_retrieve(self, cache):
+        cache.record_audit_event(
+            session_id="s1",
+            mode="auto",
+            original_prompt="fix the parser",
+            source="UserPromptSubmit",
+            hook_event="UserPromptSubmit",
+            trigger="long_unstructured",
+        )
+        events = cache.get_audit_events(limit=10)
+        assert len(events) == 1
+        assert events[0]["mode"] == "auto"
+        assert events[0]["trigger"] == "long_unstructured"
+        assert events[0]["original_prompt"] == "fix the parser"
+        assert events[0]["token_estimate"] == len("fix the parser") // 4
+
+    def test_record_with_refined(self, cache):
+        cache.record_audit_event(
+            session_id="s2",
+            mode="coach",
+            original_prompt="fix the parser and output json",
+            source="UserPromptSubmit",
+            hook_event="UserPromptSubmit",
+            trigger="long_unstructured",
+            refined_prompt="fix the parser. output as JSON.",
+        )
+        events = cache.get_audit_events(limit=10)
+        assert len(events) == 1
+        assert events[0]["refined_prompt"] == "fix the parser. output as JSON."
+        assert events[0]["refined_length"] == len("fix the parser. output as JSON.")
+        assert events[0]["refined_token_estimate"] is not None
+
+    def test_get_audit_events_since_filter(self, cache):
+        cache.record_audit_event(session_id="s1", mode="auto", original_prompt="a")
+        events = cache.get_audit_events(since=datetime(2099, 1, 1, tzinfo=UTC), limit=10)
+        assert len(events) == 0
+
+    def test_get_audit_events_mode_filter(self, cache):
+        cache.record_audit_event(session_id="s1", mode="auto", original_prompt="a")
+        cache.record_audit_event(session_id="s2", mode="coach", original_prompt="b")
+        auto_events = cache.get_audit_events(mode="auto", limit=10)
+        assert len(auto_events) == 1
+        assert auto_events[0]["mode"] == "auto"
+
+    def test_audit_summary_empty(self, cache):
+        summary = cache.audit_summary()
+        assert summary == {}
+
+    def test_audit_summary_aggregates(self, cache):
+        cache.record_audit_event(
+            session_id="s1",
+            mode="auto",
+            original_prompt="a" * 40,
+        )
+        cache.record_audit_event(
+            session_id="s2",
+            mode="auto",
+            original_prompt="b" * 80,
+        )
+        cache.record_audit_event(
+            session_id="s3",
+            mode="coach",
+            original_prompt="c" * 60,
+            refined_prompt="d" * 30,
+        )
+        summary = cache.audit_summary()
+        assert "auto" in summary
+        assert "coach" in summary
+        assert summary["auto"]["interventions"] == 2
+        assert summary["coach"]["interventions"] == 1
+        # auto: no refinement, so avg savings = 0
+        assert summary["auto"]["avg_savings"] == 0.0
+        # coach: original 60 chars (15 tokens), refined 30 chars (7 tokens), savings = 8
+        assert summary["coach"]["avg_savings"] == 8.0
+
+    def test_summary_with_mode_filter(self, cache):
+        cache.record_audit_event(session_id="s1", mode="auto", original_prompt="a")
+        cache.record_audit_event(session_id="s2", mode="coach", original_prompt="b")
+        summary = cache.audit_summary(mode="auto")
+        assert "auto" in summary
+        assert "coach" not in summary
+
+    def test_clear_removes_audit_log(self, cache):
+        cache.record_audit_event(session_id="s1", mode="auto", original_prompt="a")
+        cache.clear()
+        assert cache.get_audit_events(limit=10) == []
+
+    def test_many_events_order(self, cache):
+        for i in range(5):
+            cache.record_audit_event(session_id=f"s{i}", mode="auto", original_prompt=f"prompt {i}")
+        events = cache.get_audit_events(limit=3)
+        assert len(events) == 3
+        assert events[0]["session_id"] == "s4"  # newest first
+        assert events[1]["session_id"] == "s3"
+        assert events[2]["session_id"] == "s2"

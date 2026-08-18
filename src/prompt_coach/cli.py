@@ -70,7 +70,7 @@ def _empty_state(cache: CacheDB, since_dt: datetime | None, label: str) -> tuple
     both now exit 0, not 1: neither is an error."""
     if cache.counts()["prompts"] == 0:
         return "no cache yet", _FIRST_RUN_BODY
-    return f"0 prompts · {label}", f"quiet week -- no prompts {label}. Try a wider --since."
+    return f"0 prompts \u00b7 {label}", f"quiet week -- no prompts {label}. Try a wider --since."
 
 
 def default_stores(cfg: Config) -> list:
@@ -310,16 +310,18 @@ def stats(
     label = _since_label(since, since_dt)
     if not prompts:
         header, body = _empty_state(cache, since_dt, label)
-        console.print(Text.assemble(("prompt-coach", "bold cyan"), (f" · {header}", "dim")))
+        console.print(Text.assemble(("prompt-coach", "bold cyan"), (f" \u00b7 {header}", "dim")))
         console.print(Text(body, style="dim"))
         return
     for store, reason in sync_stats.stores_failed.items():
-        console.print(Text(f"⚠ {store}: sync failed ({reason})", style="yellow"))
+        console.print(Text(f"\u26a0 {store}: sync failed ({reason})", style="yellow"))
     m = compute_metrics(prompts)
     # Rates are behavior, not quality -- no score-band colors here (D1).
     console.print(
         Text.assemble(
-            ("prompt-coach stats", "bold cyan"), (f" · {label} · ", "dim"), ("no LLM", "dim")
+            ("prompt-coach stats", "bold cyan"),
+            (f" \u00b7 {label} \u00b7 ", "dim"),
+            ("no LLM", "dim"),
         )
     )
     table = Table(box=None)
@@ -451,11 +453,11 @@ def dash(
     label = _since_label(since, since_dt)
     if not prompts:
         header, body = _empty_state(cache, since_dt, label)
-        console.print(Text.assemble(("prompt-coach", "bold cyan"), (f" · {header}", "dim")))
+        console.print(Text.assemble(("prompt-coach", "bold cyan"), (f" \u00b7 {header}", "dim")))
         console.print(Text(body, style="dim"))
         return
     for store, reason in stores_failed.items():
-        console.print(Text(f"⚠ {store}: sync failed ({reason})", style="yellow"))
+        console.print(Text(f"\u26a0 {store}: sync failed ({reason})", style="yellow"))
     store_counts = {
         k: v for k, v in cache.counts(since=since_dt).items() if k not in ("prompts", "sessions")
     }
@@ -622,6 +624,115 @@ def cache_clear(
 
 
 @app.command()
+def audit(
+    since: str | None = typer.Option(None, "--since", help="Time range (e.g. 7d, 30d)"),
+    mode: str | None = typer.Option(
+        None, "--mode", "-m", help="Filter by mode (auto, coach, always, off)"
+    ),
+    detail: bool = typer.Option(
+        False, "--detail", "-d", help="Show individual audit entries with before/after"
+    ),
+    limit: int = typer.Option(20, "--limit", "-l", help="Max entries to show (detail mode)"),
+    plain: bool = typer.Option(False, "--plain", help="Force plain text output"),
+    json_format: bool = typer.Option(False, "--json", help="Output as JSON for agent consumption"),
+):
+    """View the nudge audit trail: interventions across all modes.
+
+    Shows a summary table by default. Use --detail for individual entries
+    with original and refined prompts.
+    """
+    from rich.console import Console
+    from rich.table import Table
+    from rich.text import Text
+
+    cfg = load_config()
+    cache = open_cache(cfg)
+    since_dt = parse_since(since)
+    label = _since_label(since, since_dt)
+    console = Console(force_terminal=False, no_color=True) if plain else Console()
+
+    if json_format:
+        import json as _json
+
+        if detail:
+            events = cache.get_audit_events(since=since_dt, mode=mode, limit=limit)
+            typer.echo(_json.dumps(events))
+        else:
+            summary = cache.audit_summary(since=since_dt, mode=mode)
+            typer.echo(_json.dumps(summary))
+        return
+
+    if detail:
+        events = cache.get_audit_events(since=since_dt, mode=mode, limit=limit)
+        if not events:
+            header = f"no audit events{mode and f' ({mode})' or ''} \u00b7 {label}"
+            console.print(
+                Text.assemble(("prompt-coach audit", "bold cyan"), (f" \u00b7 {header}", "dim"))
+            )
+            return
+        console.print(
+            Text.assemble(
+                ("prompt-coach audit", "bold cyan"),
+                (f" \u00b7 {label} \u00b7 {len(events)} events", "dim"),
+            )
+        )
+        for e in events:
+            ts = datetime.fromtimestamp(e["timestamp"], tz=UTC)
+            trig = e["trigger"] or ""
+            mode_str = e["mode"]
+            orig_len = e["original_length"]
+            ref_len = e["refined_length"]
+            saved = (orig_len - ref_len) if ref_len else 0
+            tokens_saved = e["token_estimate"] - (e["refined_token_estimate"] or 0)
+            console.print()
+            console.print(
+                Text.assemble(
+                    (f"[{ts.date().isoformat()} {ts.strftime('%H:%M:%S')}]", "bold"),
+                    (f"  {mode_str}", "cyan"),
+                    (f"  {e['hook_event'] or ''}", "dim"),
+                )
+            )
+            console.print(f"  Trigger: {trig}")
+            console.print(f"  Session: {e['session_id']}")
+            console.print(
+                f"  Length: {orig_len} chars -> {ref_len or '?'} chars"
+                f" ({saved} saved, ~{tokens_saved} tokens)"
+            )
+            console.print(f"  Original: {e['original_prompt'][:200]}")
+            if e["refined_prompt"]:
+                console.print(f"  Refined:  {e['refined_prompt'][:200]}")
+    else:
+        summary = cache.audit_summary(since=since_dt, mode=mode)
+        if not summary:
+            header = f"no audit events{mode and f' ({mode})' or ''} \u00b7 {label}"
+            console.print(
+                Text.assemble(("prompt-coach audit", "bold cyan"), (f" \u00b7 {header}", "dim"))
+            )
+            return
+        console.print(
+            Text.assemble(
+                ("prompt-coach audit", "bold cyan"),
+                (f" \u00b7 {label}", "dim"),
+            )
+        )
+        table = Table(box=None)
+        table.add_column("Mode", style="bold")
+        table.add_column("Interventions", justify="right")
+        table.add_column("Avg tokens saved", justify="right")
+        table.add_column("Total tokens saved", justify="right")
+        table.add_column("Rewrites", justify="right")
+        for mode_key, data in sorted(summary.items()):
+            table.add_row(
+                mode_key,
+                str(data["interventions"]),
+                f"{data['avg_savings']:.0f}",
+                str(data["total_savings"]),
+                str(data["rewrites"]),
+            )
+        console.print(table)
+
+
+@app.command()
 def nudge():
     """Hook target for Claude Code (UserPromptSubmit + Stop) and Hermes
     (pre_llm_call shell hook, tip-only -- see nudge.py's module docstring):
@@ -643,6 +754,57 @@ def nudge():
     except Exception:
         response = {}
     typer.echo(_json.dumps(response))
+
+
+@app.command()
+def score(
+    text: str = typer.Argument(help="The prompt text to score (0-100)"),
+    json_format: bool = typer.Option(False, "--json", help="Output as JSON for agent consumption"),
+):
+    """Score a prompt from 0-100 based on deterministic quality signals.
+
+    Evaluates structure, clarity, scope, constraints, and examples.
+    Pure deterministic — no LLM call, instant.
+    """
+    import json as _json
+
+    from prompt_coach.analysis.score import score_breakdown
+
+    result = score_breakdown(text)
+    if json_format:
+        typer.echo(_json.dumps(result))
+    else:
+        typer.echo(f"Score: {result['score']}/100")
+        if result["bonuses"]:
+            typer.echo("\nBonuses:")
+            for label, pts in result["bonuses"]:
+                typer.echo(f"  +{pts}  {label}")
+        if result["penalties"]:
+            typer.echo("\nPenalties:")
+            for label, pts in result["penalties"]:
+                typer.echo(f"  {pts}  {label}")
+        if not result["bonuses"] and not result["penalties"]:
+            typer.echo("  No significant signals detected.")
+
+
+@app.command("streaks")
+def streaks_cmd(
+    json_format: bool = typer.Option(False, "--json", help="Output as JSON for agent consumption"),
+):
+    """Show current streak data: good prompt streak, no-intervention streak,
+    and best ever streak."""
+    import json as _json
+
+    from prompt_coach.streaks import get_streaks
+
+    cfg = load_config()
+    data = get_streaks(cfg.cache_dir)
+    if json_format:
+        typer.echo(_json.dumps(data))
+    else:
+        typer.echo(f"Good prompt streak: {data.get('good_prompt_streak', 0)}")
+        typer.echo(f"No-intervention streak: {data.get('no_intervention_streak', 0)}")
+        typer.echo(f"Best ever streak: {data.get('best_streak', 0)}")
 
 
 @app.command("nudge-consume")

@@ -24,8 +24,8 @@
   to ration -- every triggered prompt gets improved.
 - "always": every UserPromptSubmit is blocked and rewritten, regardless of
   quality or session history -- an explicit opt-in, since it adds LLM
-  latency to every prompt. If the LLM is unreachable, the prompt is let
-  through unmodified (blocking with no way out would be worse than skipping).
+  latency to every single prompt. If the LLM is unreachable, the prompt is
+  let through unmodified (blocking with no way out would be worse than skipping).
 - "off": nudge never fires.
 
 Only UserPromptSubmit can block (Claude Code has no equivalent for Stop --
@@ -71,10 +71,12 @@ from typing import TYPE_CHECKING
 
 from prompt_coach.analysis.docs import find_project_docs, is_redirect_stub
 from prompt_coach.analysis.metrics import has_constraints, has_example, has_structured_output
+from prompt_coach.cache import CacheDB
 from prompt_coach.config import Config
 from prompt_coach.models import PromptOrigin
 from prompt_coach.stores.base import classify_origin
 from prompt_coach.stores.claude_code import parse_line
+from prompt_coach.streaks import record_prompt
 
 if TYPE_CHECKING:  # never imported at runtime -- see the note below
     from prompt_coach.llm.client import LocalLLM
@@ -320,13 +322,13 @@ _AUTO_RESPONSE = {
             "the user most plausibly meant, grounded in this project and "
             "conversation: pin down scope and constraints if the ask is "
             "broad; decide the output format if none is stated -- and if "
-            "the answer is naturally a list or enumeration, present it as "
+            "the answer is naturally a list or enumeration, present it as "  # noqa: E501
             "a table, or as a chart/diagram when the items have "
             "relationships or proportions (this user parses tables and "
             "visuals far better than prose bullets). Do not invent "
             "requirements beyond the plausible intent. Begin your reply "
-            "with one line stating the refined request you are answering "
-            "(prefixed 'Refined:'), then answer that refined version."
+            "by stating the full refined request (prefixed 'Refined:'), "
+            "then answer that refined version."
         ),
     },
     "systemMessage": (
@@ -371,6 +373,13 @@ def _save_pending_rewrite(cache_dir: Path, session_id: str, original: str, rewri
     for key in list(data["pending"])[: max(overflow, 0)]:
         del data["pending"][key]
     _write_pending_state(cache_dir, data)
+
+
+def _peek_pending_rewrite(cache_dir: Path, session_id: str) -> str | None:
+    """Read the pending rewrite for a session without consuming it."""
+    data = _load_pending_state(cache_dir)
+    entry = data["pending"].get(session_id)
+    return entry.get("rewritten") if entry else None
 
 
 def consume_pending_rewrite(cache_dir: Path, session_id: str, want: str) -> str | None:
@@ -433,6 +442,33 @@ def _resolve_mode(cfg: Config, cwd: str | None) -> str:
     return best_match if best_match is not None else cfg.nudge.mode
 
 
+def _record_audit(
+    cfg: Config,
+    payload: dict,
+    original: str,
+    trigger: str | None = None,
+    refined: str | None = None,
+) -> None:
+    """Record an audit event for a nudge intervention."""
+    try:
+        cache = CacheDB(cfg.cache_dir / "cache.db")
+        hook = payload.get("hook_event_name", "UserPromptSubmit")
+        cache.record_audit_event(
+            session_id=payload.get("session_id", ""),
+            mode=_resolve_mode(cfg, payload.get("cwd")),
+            source=hook,
+            hook_event=hook,
+            trigger=trigger or "",
+            original_prompt=original,
+            refined_prompt=refined,
+        )
+        cache.close()
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning("audit record failed", exc_info=True)
+
+
 def _hermes_tip_response(payload: dict, cfg: Config) -> dict:
     """Hermes's `pre_llm_call` shell hook: same JSON wire protocol as Claude
     Code's UserPromptSubmit (Hermes's own docs call this event the direct
@@ -450,6 +486,9 @@ def _hermes_tip_response(payload: dict, cfg: Config) -> dict:
     if not prompt:
         return {}
     tip = evaluate(prompt, session_id, cfg.cache_dir)
+    if tip:
+        _record_audit(cfg, payload, prompt, trigger=tip)
+    record_prompt(cfg.cache_dir, prompt, was_nudged=tip is not None)
     return {"context": tip} if tip else {}
 
 
@@ -472,10 +511,21 @@ def build_response(payload: dict, cfg: Config) -> dict:
         return {}
 
     if payload.get("hook_event_name") == "Stop":
-        if mode != "coach":
+        if mode not in ("coach", "hint"):
             return {}
         transcript = payload.get("transcript_path")
-        return hook_response_stop(session_id, Path(transcript), cfg.cache_dir) if transcript else {}
+        return (
+            hook_response_stop(
+                session_id,
+                Path(transcript),
+                cfg.cache_dir,
+                cfg=cfg,
+                payload=payload,
+                hint_mode=(mode == "hint"),
+            )
+            if transcript
+            else {}
+        )
 
     prompt = payload.get("prompt", "")
     if not prompt:
@@ -493,14 +543,25 @@ def build_response(payload: dict, cfg: Config) -> dict:
         # interrupts, so there's no nag cost to ration. No LLM call either
         # (see _AUTO_RESPONSE), so this path is near-free and never needs
         # a degraded fallback.
-        return _AUTO_RESPONSE if _tip_for(prompt) is not None else {}
+        tip = _tip_for(prompt)
+        if tip is not None:
+            _record_audit(cfg, payload, prompt, trigger=tip)
+        record_prompt(cfg.cache_dir, prompt, was_nudged=tip is not None)
+        return _AUTO_RESPONSE if tip is not None else {}
+
+    if mode == "hint":
+        # Hint mode: let the prompt through untouched. The Stop hook
+        # delivers the tip after the response instead.
+        tip = _tip_for(prompt)
+        record_prompt(cfg.cache_dir, prompt, was_nudged=False)
+        return {}
 
     if mode == "always":
         if _is_machine_prompt(prompt):
             return {}  # harness traffic, not a prompt anyone typed
         llm = _make_llm(cfg)
         context = gather_context(payload) if llm is not None else None
-        return _rewrite_or_fallback(
+        result = _rewrite_or_fallback(
             prompt,
             llm,
             fallback_message=None,
@@ -508,6 +569,11 @@ def build_response(payload: dict, cfg: Config) -> dict:
             session_id=session_id,
             context=context,
         )
+        if result.get("decision") == "block":
+            refined = _peek_pending_rewrite(cfg.cache_dir, session_id)
+            _record_audit(cfg, payload, prompt, trigger="always_mode", refined=refined)
+        record_prompt(cfg.cache_dir, prompt, was_nudged=result.get("decision") == "block")
+        return result
 
     # "coach": only the calibrated triggers, once per session.
     tip = _tip_for(prompt)
@@ -516,7 +582,7 @@ def build_response(payload: dict, cfg: Config) -> dict:
     _record_nudge(cfg.cache_dir, session_id)
     llm = _make_llm(cfg)
     context = gather_context(payload) if llm is not None else None
-    return _rewrite_or_fallback(
+    result = _rewrite_or_fallback(
         prompt,
         llm,
         fallback_message=tip,
@@ -524,6 +590,13 @@ def build_response(payload: dict, cfg: Config) -> dict:
         session_id=session_id,
         context=context,
     )
+    if result.get("decision") == "block":
+        refined = _peek_pending_rewrite(cfg.cache_dir, session_id)
+        _record_audit(cfg, payload, prompt, trigger=tip, refined=refined)
+    else:
+        _record_audit(cfg, payload, prompt, trigger=tip)
+    record_prompt(cfg.cache_dir, prompt, was_nudged=result.get("decision") == "block")
+    return result
 
 
 def _tail_human_prompts(transcript_path: Path, limit: int) -> list[str]:
@@ -562,7 +635,20 @@ def _last_human_prompt(transcript_path: Path) -> str | None:
     return prompts[0] if prompts else None
 
 
-def hook_response_stop(session_id: str, transcript_path: Path, cache_dir: Path) -> dict:
+def _hint_for(prompt: str) -> str | None:
+    """Same triggers as _tip_for but never filtered by once-per-session gate.
+    Used by hint mode and auto mode (which also has no gating)."""
+    return _tip_for(prompt)
+
+
+def hook_response_stop(
+    session_id: str,
+    transcript_path: Path,
+    cache_dir: Path,
+    cfg: Config | None = None,
+    payload: dict | None = None,
+    hint_mode: bool = False,
+) -> dict:
     """Build the Stop hook JSON response: always the plain non-blocking
     `systemMessage` tip (Stop can't block-and-offer-a-rewrite the way
     UserPromptSubmit can -- see module docstring), reading the prompt from
@@ -570,5 +656,16 @@ def hook_response_stop(session_id: str, transcript_path: Path, cache_dir: Path) 
     prompt = _last_human_prompt(transcript_path)
     if prompt is None:
         return {}
-    tip = evaluate(prompt, session_id, cache_dir)
+    if hint_mode:
+        tip = _hint_for(prompt)
+    else:
+        tip = evaluate(prompt, session_id, cache_dir)
+    if tip and cfg:
+        _record_audit(
+            cfg,
+            payload or {"session_id": session_id, "hook_event_name": "Stop"},
+            prompt,
+            trigger=tip,
+        )
+    record_prompt(cache_dir, prompt, was_nudged=tip is not None)
     return {"systemMessage": tip} if tip else {}

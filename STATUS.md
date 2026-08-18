@@ -48,6 +48,90 @@ web stack. DECISIONS.md (2026-08-17) has the full reasoning. Shipped:
   time-range dropdown via query params (cheap, no framework) is the
   obvious next step if it's wanted; option (b), a full FastAPI app, only
   if that turns out too limiting.
+Last updated: 2026-08-17 by Claude: scoring, streaks, hint mode, agent-friendly
+CLI, auto mode shows refined prompt. 268 tests. ruff/black clean.
+
+## Scoring, streaks, hint mode, and agent CLI (2026-08-17)
+
+### Prompt scoring (0-100)
+New `src/prompt_coach/analysis/score.py` -- pure deterministic scoring engine.
+Each prompt starts at 50 and gains/loses points for:
+- Bonuses: output format (+15), example (+10), constraints (+10), project
+  context (+10), concise length (+5)
+- Penalties: vague scope (-15), missing output format (-15), no example (-10),
+  no constraints (-10), too short (-10), too long rambling (-10), multiple
+  conflated asks (-10)
+- Clamped to 0-100
+
+`prompt-coach score "your prompt"` -- scores a prompt with breakdown.
+`prompt-coach score "your prompt" --json` -- JSON output for agent consumption.
+
+### Streak tracking
+New `src/prompt_coach/streaks.py` -- tracks consecutive good prompts (score >=
+70) and consecutive no-intervention prompts. Persisted to streaks.json in the
+cache dir. History kept up to 1000 entries.
+
+`prompt-coach streaks` -- shows current streaks.
+`prompt-coach streaks --json` -- JSON output for agent consumption.
+
+### Hint mode (3rd option)
+New nudge mode "hint" -- non-interruptive tips that appear after the model
+responds. Works via the Stop hook: the prompt goes through untouched, but if it
+triggers a weak-prompt rule, a system message tip appears alongside the
+response. No once-per-session gate -- every weak prompt gets a hint.
+
+```toml
+[nudge]
+mode = "hint"
+```
+
+### Auto mode shows the full refined prompt
+The auto mode directive now asks for the full refined prompt (not just a
+one-line summary) so the user sees exactly what their prompt became:
+
+```
+Refined: <full refined prompt>
+<model's answer>
+```
+
+### Agent-friendly CLI
+All new commands support `--json` for machine-readable output. The agent
+(Claude Code, Hermes) can run `prompt-coach score`, `prompt-coach streaks`,
+`prompt-coach audit --json` and present the results conversationally.
+
+### Config updates
+`NUDGE_MODES` now includes "hint" as a 5th option alongside coach, auto,
+always, and off.
+
+## Audit trail for all nudge modes (2026-08-17)
+
+New persistent audit log in the cache DB (~/.cache/prompt-coach/cache.db,
+`audit_log` table) records every nudge intervention across all modes. Each
+entry captures timestamp, session ID, source, mode, trigger, original prompt,
+refined prompt (when available), and estimated token savings.
+
+- `prompt-coach audit` — summary table (interventions, avg/total tokens saved,
+  rewrites per mode)
+- `prompt-coach audit --detail` — individual entries with before/after text
+- `prompt-coach audit --mode auto --since 7d` — filter by mode and time range
+- `prompt-coach audit --mode coach --detail --limit 10` — last 10 coach blocks
+
+For auto mode, the refined prompt is logged as null (the session model does
+the refinement internally and the hook never sees it), but the original prompt
+and trigger are recorded so you can verify the intervention fired. Coach/always
+modes log both original and refined.
+
+## Per-directory nudge override docs (2026-08-17)
+
+The `nudge.dir_overrides` config already supports per-directory mode overrides
+via longest-prefix matching on the hook's `cwd`. Documented in config.toml
+and the setup wizard prompts for it. Example config:
+
+```toml
+[nudge.dir_overrides]
+"/home/alistair/projects/important-project" = "coach"
+"/home/alistair/projects/experiments" = "off"
+```
 
 ## "auto" nudge mode: hands-off prompt improvement (2026-08-10)
 

@@ -4,6 +4,8 @@ Parses each source store once, resyncs incrementally, dedupes session forks,
 maintains an FTS5 index for `query`, and memoises LLM results. Lives under
 ~/.cache/prompt-coach/ (0700/0600: it contains prompt content) and is fully
 disposable: deleting the directory erases every derived artifact.
+
+Also maintains an audit_log table for nudge interventions across all modes.
 """
 
 from __future__ import annotations
@@ -18,7 +20,24 @@ from pathlib import Path
 from prompt_coach.models import Prompt, PromptOrigin, SourceKind, SyncStats
 from prompt_coach.stores.base import SessionStore
 
-_SCHEMA = """
+_SCHEMA = """\
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    session_id TEXT NOT NULL,
+    source TEXT,
+    mode TEXT NOT NULL,
+    hook_event TEXT,
+    trigger TEXT,
+    original_prompt TEXT NOT NULL,
+    refined_prompt TEXT,
+    original_length INTEGER NOT NULL,
+    refined_length INTEGER,
+    token_estimate INTEGER NOT NULL,
+    refined_token_estimate INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_time ON audit_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_audit_log_mode ON audit_log(mode);
 CREATE TABLE IF NOT EXISTS prompts (
     source TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -81,6 +100,91 @@ class CacheDB:
 
     def close(self) -> None:
         self.conn.close()
+
+    # -- audit log -----------------------------------------------------------
+
+    def record_audit_event(
+        self,
+        *,
+        session_id: str,
+        mode: str,
+        original_prompt: str,
+        source: str | None = None,
+        hook_event: str | None = None,
+        trigger: str | None = None,
+        refined_prompt: str | None = None,
+    ) -> None:
+        """Record a nudge intervention in the audit log."""
+        token_estimate = len(original_prompt) // 4
+        refined_token_estimate = len(refined_prompt) // 4 if refined_prompt else None
+        self.conn.execute(
+            """INSERT INTO audit_log
+               (timestamp, session_id, source, mode, hook_event, trigger,
+                original_prompt, refined_prompt, original_length, refined_length,
+                token_estimate, refined_token_estimate)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                datetime.now(tz=UTC).timestamp(),
+                session_id,
+                source,
+                mode,
+                hook_event,
+                trigger,
+                original_prompt,
+                refined_prompt,
+                len(original_prompt),
+                len(refined_prompt) if refined_prompt else None,
+                token_estimate,
+                refined_token_estimate,
+            ),
+        )
+        self.conn.commit()
+
+    def get_audit_events(
+        self,
+        *,
+        since: datetime | None = None,
+        mode: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Get audit events, newest first."""
+        sql = "SELECT * FROM audit_log WHERE 1=1"
+        args: list = []
+        if since is not None:
+            sql += " AND timestamp >= ?"
+            args.append(since.timestamp())
+        if mode is not None:
+            sql += " AND mode = ?"
+            args.append(mode)
+        sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        args.extend([limit, offset])
+        rows = self.conn.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
+
+    def audit_summary(
+        self,
+        since: datetime | None = None,
+        mode: str | None = None,
+    ) -> dict:
+        """Aggregate summary of audit events."""
+        sql = """SELECT
+            mode,
+            COUNT(*) AS interventions,
+            AVG(token_estimate - COALESCE(refined_token_estimate, token_estimate)) AS avg_savings,
+            SUM(token_estimate - COALESCE(refined_token_estimate, token_estimate)) AS total_savings,
+            SUM(CASE WHEN refined_prompt IS NOT NULL THEN 1 ELSE 0 END) AS rewrites
+        FROM audit_log WHERE 1=1"""
+        args: list = []
+        if since is not None:
+            sql += " AND timestamp >= ?"
+            args.append(since.timestamp())
+        if mode is not None:
+            sql += " AND mode = ?"
+            args.append(mode)
+        sql += " GROUP BY mode ORDER BY mode"
+        rows = self.conn.execute(sql, args).fetchall()
+        return {r["mode"]: dict(r) for r in rows}
 
     # -- sync ---------------------------------------------------------------
 
@@ -292,5 +396,6 @@ class CacheDB:
         self.conn.executescript(
             "DELETE FROM prompts; DELETE FROM prompts_fts;"
             " DELETE FROM file_state; DELETE FROM llm_cache;"
+            " DELETE FROM audit_log;"
         )
         self.conn.commit()

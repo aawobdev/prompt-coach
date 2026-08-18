@@ -640,6 +640,81 @@ class TestHermesPreLlmCall:
         payload = {"hook_event_name": "pre_llm_call", "session_id": "h4", "extra": {}}
         assert build_response(payload, cfg) == {}
 
+
+class TestAuditIntegration:
+    """Verify that nudge interventions actually write to the audit log."""
+
+    def test_auto_mode_records_audit(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="auto")
+        build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        from prompt_coach.cache import CacheDB
+
+        cache = CacheDB(cfg.cache_dir / "cache.db")
+        events = cache.get_audit_events(limit=10)
+        cache.close()
+        assert len(events) == 1
+        assert events[0]["mode"] == "auto"
+        assert events[0]["trigger"] != ""
+        assert events[0]["original_prompt"] == LONG_WEAK
+
+    def test_coach_llm_down_records_audit_with_tip(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach")  # LLM is unreachable
+        build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        from prompt_coach.cache import CacheDB
+
+        cache = CacheDB(cfg.cache_dir / "cache.db")
+        events = cache.get_audit_events(limit=10)
+        cache.close()
+        assert len(events) == 1
+        assert events[0]["mode"] == "coach"
+        assert events[0]["refined_prompt"] is None  # LLM down, no rewrite
+
+    def test_coach_llm_up_records_audit_with_rewrite(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path, mode="coach")
+        build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        from prompt_coach.cache import CacheDB
+
+        cache = CacheDB(cfg.cache_dir / "cache.db")
+        events = cache.get_audit_events(limit=10)
+        cache.close()
+        assert len(events) == 1
+        assert events[0]["mode"] == "coach"
+        assert events[0]["refined_prompt"] == "REWRITTEN"
+
+    def test_hermes_path_records_audit(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="coach")
+        build_response(
+            {
+                "hook_event_name": "pre_llm_call",
+                "session_id": "h1",
+                "extra": {"user_message": LONG_WEAK},
+            },
+            cfg,
+        )
+        from prompt_coach.cache import CacheDB
+
+        cache = CacheDB(cfg.cache_dir / "cache.db")
+        events = cache.get_audit_events(limit=10)
+        cache.close()
+        assert len(events) == 1
+        assert events[0]["source"] == "pre_llm_call"
+
+    def test_untriggered_prompt_does_not_record_audit(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="auto")
+        build_response({"prompt": SHORT_ORDINARY, "session_id": "s1"}, cfg)
+        from prompt_coach.cache import CacheDB
+
+        cache = CacheDB(cfg.cache_dir / "cache.db")
+        events = cache.get_audit_events(limit=10)
+        cache.close()
+        assert len(events) == 0
+
+
+class TestDirOverride(TestHermesPreLlmCall):
     def test_dir_override_respected(self, tmp_path):
         cfg = make_cfg(tmp_path, mode="coach", dir_overrides={"/proj": "off"})
         resp = build_response(self._payload(LONG_WEAK, session_id="h5", cwd="/proj"), cfg)

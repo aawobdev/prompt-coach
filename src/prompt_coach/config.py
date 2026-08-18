@@ -62,7 +62,7 @@ class StoresConfig:
 #   adds LLM latency to every single prompt. If the LLM is unreachable, the
 #   prompt is let through unmodified rather than blocking with no way out.
 # "off": nudge never fires (UserPromptSubmit or Stop).
-NUDGE_MODES = ("coach", "auto", "always", "off")
+NUDGE_MODES = ("coach", "auto", "always", "hint", "off")
 DEFAULT_NUDGE_MODE = "coach"
 
 
