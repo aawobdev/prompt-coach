@@ -1008,3 +1008,36 @@ config.py/cli.py comment updates, test_nudge.py
 (`TestBuildResponseAutoMode` rewritten, including a guard test that
 auto never constructs an LLM client). 275 tests.
 **Decided by**: Alistair, same session, 2026-08-10.
+
+## 2026-09-20 - Ship the Claude Code integration as a plugin (thin wrapper over the CLI)
+
+**Trigger**: audit of which Claude Code features prompt-coach uses found
+that `install.sh` and `setup` register nothing: the two hooks lived only in
+`~/.claude/settings.json` and the three slash commands only in
+`~/.claude/commands/`, all hand-made and outside git. A fresh install was
+inert, and the hook command was an absolute path.
+**Decision**: package hooks and commands as a Claude Code plugin in
+`plugin/`, marketplace manifest at the repo root, plugin stays a thin
+wrapper and the Python CLI stays the brain (installed by `uv tool`).
+Hooks are exec-form calls to `${CLAUDE_PLUGIN_ROOT}/scripts/pc`, a
+POSIX-sh launcher that finds the CLI (PATH, then `~/.local/bin`) and fails
+open, because a plugin's `bin/` is only on the Bash tool's PATH (not
+documented for hooks) and a missing CLI must never block a prompt. Skills
+are `disable-model-invocation` so only the user can resend or run.
+**Verified facts** (docs read raw and tested with the local CLI 2.1.239,
+not from a summariser, which garbled the hook schema once): plugin hooks
+are NOT de-duplicated against `settings.json` hooks (migration must remove
+the old ones); plugin skills are always namespaced `/prompt-coach:<skill>`;
+hooks.json needs the top-level `hooks` key; `${CLAUDE_SESSION_ID}` and
+`!`command`` work in plugin skills and the session ID matches the hook
+payload's; UserPromptSubmit still cannot rewrite prompt text; a plugin
+cannot ship a `statusLine`.
+**Alternatives considered**: bundling the Python source in the plugin and
+running via `uv run` (rejected: unknown what gets copied into the plugin
+cache, slower per prompt); short plugin name `coach` for `/coach:accept`
+(rejected: less discoverable); separate marketplace repo (rejected:
+version drift, and the version-equality test needs one repo).
+**Affects**: plugin/, .claude-plugin/, nudge.py (`ACCEPT_COMMAND`,
+`ORIGINAL_COMMAND`, docstrings), cli.py docstring, README, AGENTS.md
+(carve-out: the plugin is a product, not agent guidance), tests/test_plugin.py.
+**Decided by**: Alistair (go-ahead on the plan), 2026-09-20.

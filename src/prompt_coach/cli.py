@@ -812,8 +812,8 @@ def nudge_consume(
     want: str = typer.Option(..., "--want", help="'rewritten' or 'original'"),
     session: str = typer.Option(..., "--session", help="Claude Code session ID"),
 ):
-    """Internal target for the /coach-accept and /coach-original slash
-    commands (~/.claude/commands/, not part of this package): pops the
+    """Internal target for the /prompt-coach:accept and /prompt-coach:original
+    plugin skills (plugin/skills/, not part of this package): pops the
     rewrite `nudge` held onto for SESSION and prints the requested side of
     it, so the slash command's bash substitution can resend it as the next
     message. Always exits 0 -- its stdout is spliced straight into the next

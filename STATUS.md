@@ -1,7 +1,39 @@
 # Project Status - prompt-coach
-Last updated: 2026-08-17 by Claude (Opus 4.8): dashboard now has a web
-face -- `dash --html <file>` writes a self-contained page, and `serve`
-starts a localhost web server and opens it in a browser. 278 tests.
+Last updated: 2026-09-20 by Claude (Sonnet 5): Claude Code plugin (phase 1
+of 4): hooks and slash commands now ship in `plugin/` instead of hand-edited
+`~/.claude/`. 318 tests.
+
+## Claude Code plugin, phase 1 (2026-09-20)
+
+Closes the "fresh installs are inert" gap: `install.sh` and `setup` never
+registered the hooks or slash commands, which existed only as hand edits in
+`~/.claude/settings.json` and `~/.claude/commands/`. DECISIONS.md
+(2026-09-20) has the reasoning. Shipped on branch
+`claude/prompt-coach-claude-features-4d502e`:
+- `plugin/` (hooks.json, fail-open `scripts/pc` launcher, skills `accept`,
+  `original`, `run`) and `.claude-plugin/marketplace.json`; both pass
+  `claude plugin validate --strict`.
+- Block text now says `/prompt-coach:accept` / `/prompt-coach:original`
+  (`ACCEPT_COMMAND` / `ORIGINAL_COMMAND` in nudge.py).
+- `tests/test_plugin.py`: manifest/version sync, hooks shape, launcher
+  behaviour (fail-open, thin PATH, once-only warning), skill-to-CLI
+  consistency. Mutation-checked (lost exec bit, renamed CLI target).
+- Verified live with the real plugin only (`--setting-sources project,local`
+  to exclude the old hooks): audit interventions 1 -> 2 (hook fired),
+  `/prompt-coach:accept` and `/prompt-coach:run score` ran through the
+  launcher. Not proven: the model following auto mode's "Refined:"
+  directive (haiku asked a clarifying question instead), and PATH in the
+  desktop app's hook environment (the launcher has a `~/.local/bin` fallback
+  for it).
+- NOT yet done: the live `~/.claude/settings.json` still has the old hooks,
+  and the plugin is not installed there (installing both double-fires).
+
+### Next (phases 2-4 of the plan)
+2. `prompt-coach doctor`, a `setup` step that installs the plugin, and a
+   backed-up, confirmed migration that removes the legacy hooks and
+   commands. 3. `SessionStart` hook showing streak/top weakness as a
+   user-visible `systemMessage`. 4. Optional: status-line offer in `setup`
+   (plugins cannot ship a `statusLine`), `claude plugin validate` in CI.
 
 ## Web dashboard: `dash --html` + `serve` (2026-08-17)
 

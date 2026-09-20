@@ -8,6 +8,9 @@ in `DECISIONS.md`.)
 > `.cursorrules`, `.github/copilot-instructions.md`, or any other
 > agent-specific config files. If you need to add or correct guidance, edit
 > `AGENTS.md` (or the nearest `AGENTS.md` in a subdirectory).
+>
+> The Claude Code plugin under `plugin/` (with `.claude-plugin/marketplace.json`)
+> is a shipped product, not agent guidance, so it is not covered by this rule.
 
 ## What This Is
 

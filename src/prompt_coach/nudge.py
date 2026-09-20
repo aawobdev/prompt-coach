@@ -2,11 +2,12 @@
 
 - "coach" (default): the calibrated weak-prompt triggers fire at most once
   per session. When the local LLM is reachable, the prompt is BLOCKED and an
-  LLM-rewritten version is offered in the block reason -- run /coach-accept
-  to resend the rewrite or /coach-original to resend your prompt as-is (see
-  consume_pending_rewrite below; these are ~/.claude/commands/ slash
-  commands, not part of this package). When the LLM isn't reachable, it
-  degrades to the old non-blocking systemMessage tip.
+  LLM-rewritten version is offered in the block reason -- run
+  /prompt-coach:accept to resend the rewrite or /prompt-coach:original to
+  resend your prompt as-is (see consume_pending_rewrite below; these are
+  skills in the Claude Code plugin under plugin/, not part of this Python
+  package). When the LLM isn't reachable, it degrades to the old
+  non-blocking systemMessage tip.
 - "auto": the same calibrated triggers as coach decide whether a prompt
   needs work, but the improvement is applied automatically -- the prompt
   is NOT blocked and there is no accept/reject step. UserPromptSubmit
@@ -294,11 +295,18 @@ def _make_llm(cfg: Config) -> LocalLLM | None:
     return llm if llm.available() else None
 
 
+# Plugin skills are always namespaced /<plugin>:<skill> (verified 2026-09-20),
+# so these track plugin/skills/{accept,original}; tests/test_plugin.py checks
+# they stay in sync.
+ACCEPT_COMMAND = "/prompt-coach:accept"
+ORIGINAL_COMMAND = "/prompt-coach:original"
+
+
 def _block_reason(rewritten: str) -> str:
     return (
         "prompt-coach held this prompt back -- here's a tighter rewrite:\n\n"
         f"{rewritten}\n\n"
-        "Run /coach-accept to send the rewrite, or /coach-original to send "
+        f"Run {ACCEPT_COMMAND} to send the rewrite, or {ORIGINAL_COMMAND} to send "
         "your prompt as-is."
     )
 
@@ -364,8 +372,8 @@ def _write_pending_state(cache_dir: Path, data: dict) -> None:
 
 
 def _save_pending_rewrite(cache_dir: Path, session_id: str, original: str, rewritten: str) -> None:
-    """Record what a block offered, so /coach-accept and /coach-original
-    (see nudge_consume in cli.py) can later resend the right text without
+    """Record what a block offered, so /prompt-coach:accept and
+    /prompt-coach:original (see nudge_consume in cli.py) can later resend the right text without
     the user having to copy/paste it themselves."""
     data = _load_pending_state(cache_dir)
     data["pending"][session_id] = {"original": original, "rewritten": rewritten}
@@ -383,7 +391,7 @@ def _peek_pending_rewrite(cache_dir: Path, session_id: str) -> str | None:
 
 
 def consume_pending_rewrite(cache_dir: Path, session_id: str, want: str) -> str | None:
-    """CLI entry point for /coach-accept and /coach-original: pop the
+    """CLI entry point for /prompt-coach:accept and /prompt-coach:original: pop the
     pending rewrite for `session_id` and return `want` ("rewritten" or
     "original"), or None if nothing is pending (stale/reused command).
     Also marks the session to skip the nudge gate on its next
@@ -532,7 +540,7 @@ def build_response(payload: dict, cfg: Config) -> dict:
         return {}
 
     if _pop_skip_next(cfg.cache_dir, session_id):
-        # This is the resend triggered by /coach-accept or /coach-original
+        # This is the resend triggered by /prompt-coach:accept or :original
         # (consume_pending_rewrite set this flag) -- let it through as-is,
         # regardless of mode, rather than immediately holding it back again.
         return {}

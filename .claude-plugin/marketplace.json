@@ -1,0 +1,14 @@
+{
+  "name": "prompt-coach",
+  "description": "Local-first prompt coaching for Claude Code: weak-prompt nudges, rewrite accept/reject, and report shortcuts.",
+  "owner": {
+    "name": "Alistair"
+  },
+  "plugins": [
+    {
+      "name": "prompt-coach",
+      "source": "./plugin",
+      "description": "Nudge weak prompts (UserPromptSubmit + Stop hooks) and resend rewrites with /prompt-coach:accept or /prompt-coach:original. Requires the prompt-coach CLI (./install.sh)."
+    }
+  ]
+}
