@@ -1136,3 +1136,35 @@ time; any percentage in a bullet counts as a constraint.
 stores/base.py, stores/claude_code.py, AGENTS.md, tests. 413 tests.
 **Decided by**: Alistair ("do 1 and (c)"), 2026-09-24.
 
+## 2026-09-24 - Plugin phase 3: SessionStart summary as a user-only systemMessage
+
+**Trigger**: phase 3 of the plugin plan (STATUS.md 2026-09-20): show the
+user's streak and top weakness when a session starts.
+**Decision**: a `SessionStart` hook (matcher `startup`, 5s) through the
+existing `pc nudge` entry point, returning a JSON `systemMessage` only.
+Hooks docs (read 2026-09-24): SessionStart adds plain stdout and
+`additionalContext` to the model's context, while `systemMessage` is shown
+to the user. So this costs no tokens and can't steer the model, which is
+right for a coaching note aimed at the person. Content: prompts since the
+last nudge plus the most common nudge trigger in the last 7 days, with a
+one-line fix. Silent on resume/clear/compact/fork, with no history, and in
+`off` mode.
+**Why not the "good prompt" streak**: on the real data only 6 of 245
+recent prompts scored 70+ and the best streak is 1, so it would read "0 in
+a row" nearly every session. The no-intervention streak and the top
+trigger carry signal.
+**Alternatives considered**: `additionalContext` (rejected: spends tokens
+every session and nudges the model rather than the user); running the
+scorer or a sync at start (rejected: the prompt waits on SessionStart, so
+it must stay a file read and one query); showing on resume too (rejected:
+repetitive mid-conversation).
+**Verified**: live `claude -p --plugin-dir` with stream-json: hook fired
+with real data, model confirmed the summary was not in its context,
+resume fired nothing. ~0.15s.
+**Also fixed**: `streaks.py` shared one history list across fresh caches
+(shallow copy of the defaults); caught by the new tests, regression test
+added and mutation-checked.
+**Affects**: session_summary.py (new), nudge.py (`build_response`
+dispatch), streaks.py, plugin/hooks/hooks.json, README, tests.
+**Decided by**: Alistair ("start phase 3"), 2026-09-24.
+

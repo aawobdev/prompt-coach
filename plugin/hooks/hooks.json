@@ -1,13 +1,30 @@
 {
-  "description": "prompt-coach nudge: weak-prompt detection before send, hint tips after the response",
+  "description": "prompt-coach: weak-prompt nudges before send, hint tips after the response, a one-line coaching summary at session start",
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/pc",
+            "args": [
+              "nudge"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/pc",
-            "args": ["nudge"],
+            "args": [
+              "nudge"
+            ],
             "timeout": 25
           }
         ]
@@ -19,7 +36,9 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/pc",
-            "args": ["nudge"],
+            "args": [
+              "nudge"
+            ],
             "timeout": 10
           }
         ]

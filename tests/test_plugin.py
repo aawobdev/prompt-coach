@@ -72,8 +72,13 @@ class TestHooks:
         assert "hooks" in data
         return data["hooks"]
 
-    def test_registers_user_prompt_submit_and_stop(self):
-        assert set(self._hooks()) == {"UserPromptSubmit", "Stop"}
+    def test_registers_session_start_user_prompt_submit_and_stop(self):
+        assert set(self._hooks()) == {"SessionStart", "UserPromptSubmit", "Stop"}
+
+    def test_session_start_fires_on_new_sessions_only(self):
+        # Not resume/clear/compact/fork: the summary is a once-per-session
+        # greeting, not something to repeat mid-conversation.
+        assert [g["matcher"] for g in self._hooks()["SessionStart"]] == ["startup"]
 
     def test_every_hook_is_exec_form_through_the_launcher(self):
         for event, groups in self._hooks().items():
@@ -87,6 +92,9 @@ class TestHooks:
         hooks = self._hooks()
         assert hooks["UserPromptSubmit"][0]["hooks"][0]["timeout"] == 25
         assert hooks["Stop"][0]["hooks"][0]["timeout"] == 10
+        # SessionStart runs at launch and a prompt sent meanwhile waits for
+        # it, so keep it tight; it only reads a JSON file and one query.
+        assert hooks["SessionStart"][0]["hooks"][0]["timeout"] == 5
 
     def test_launcher_is_executable(self):
         assert LAUNCHER.is_file()
