@@ -1211,3 +1211,28 @@ from a hook is riskier than the one-time `install.sh`).
 **Decided by**: Claude on the evidence above, under Alistair's "start
 phase 4", 2026-09-24; reversible if you want the status line anyway.
 
+## 2026-09-24 - has_sections rejects pasted documents by shape; percentages need a bound
+
+**Trigger**: the two known limits from the paste-detection work. On the
+real corpus about 18 of the 26 prompts credited with sections were pastes
+(forms, contracts, logs, script output, a pasted email), and bare
+percentages in bullets counted as constraints.
+**Decision**: four shape rules in `has_sections`, each from a pattern seen
+in the misfires: (1) any repeated label means records or a log; (2) a
+`Label:` counts only as a header with a body under it or with a 4+ word
+prose value, since 1-3 word values are form fields; (3) headers need
+non-label text under them (pasted ipconfig leaves bare headers once its
+detail lines are stripped); (4) at least 0.5 counted labels per 1,000
+chars of the whole prompt, so a few labels in a long pasted document don't
+count (typed sectioned prompts all sat at 0.67+). Percentages count as a
+constraint only after a bound word or comparator.
+**Result** (3,807 prompts, `main` vs branch): sections 26 -> 11, no typed
+sectioned prompt lost; percentage false positives 2 -> 0; no other signal
+or nudge changed. Per-rule tests, mutation-checked; the first round of
+mutations exposed two tests that didn't isolate their rule, fixed.
+**Remaining limit**: pastes whose sections carry prose values (help text,
+a pasted Claude reply, artifact-comment context) look exactly like typed
+sections; 3 of the 11. Telling them apart needs provenance, not shape.
+**Affects**: analysis/metrics.py, tests/test_metrics.py.
+**Decided by**: Alistair ("fix the paste detection known limits"), 2026-09-24.
+

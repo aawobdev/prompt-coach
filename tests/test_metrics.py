@@ -136,6 +136,14 @@ class TestHasConstraints:
         assert has_constraints("you must only use stdlib")
         assert has_constraints("never delete files")
 
+    def test_a_bare_percentage_is_not_a_bound(self):
+        """Real corpus 2026-09-24: a figure in a bullet is a reading, not a
+        limit. It needs a bound next to it."""
+        assert not has_constraints("- Related context from the same slides: 72%")
+        assert not has_constraints("3. So I'm not 100% sure")
+        assert has_constraints("- keep error rate below 2%")
+        assert has_constraints("- at most 10% of rows may change")
+
     def test_implicit_list_needs_an_actual_bound(self):
         """code review 2026-09-24: any bullet/numbered line used to count
         as "has constraints", regardless of content -- a bare topic list
@@ -195,10 +203,13 @@ class TestHasExample:
 
 class TestHasSections:
     def test_two_headers(self):
-        assert has_sections("Problem: xyz\nExpected: abc")
+        assert has_sections(
+            "Problem: the nightly sync stops after about an hour\n"
+            "Expected: it keeps running until the queue is empty"
+        )
 
     def test_goal_and_steps(self):
-        assert has_sections("Goal: fix this\nSteps:\n1. do it")
+        assert has_sections("Goal: get the export job passing again\nSteps:\n1. do it")
 
     def test_single_header_not_enough(self):
         assert not has_sections("Problem: xyz")
@@ -213,6 +224,44 @@ class TestHasSections:
         pattern rubric.py's A4 check already uses."""
         assert has_sections("Root Cause:\nThe timer leaks.\nFix:\nClear it on unmount.")
         assert has_sections("## Investigation\n...\n## Resolution\n...")
+
+    def test_header_value_is_read_from_its_own_line(self):
+        # The label pattern's trailing \s can swallow the newline; the body
+        # line below a header must not be mistaken for a 1-3 word value.
+        assert has_sections("Root Cause:\nOK.\nFix:\nDone.")
+
+    # Pasted-document shapes from the real corpus (2026-09-24), where about
+    # 18 of the 26 prompts credited with sections were pastes. One test per
+    # rule, each built so only that rule rejects it.
+
+    def test_form_fields_with_short_values_are_not_sections(self):
+        assert not has_sections("CMDKEY: /list\nSamba password: stored\nCount: 5")
+
+    def test_repeated_labels_are_records_not_sections(self):
+        # Prose values and distinct names would pass every other rule.
+        assert not has_sections(
+            "Question: what time is it in Rome right now\n"
+            "Answer: it is quarter to four in the afternoon\n"
+            "Question: what is the capital of Italy please\n"
+            "Answer: the capital of Italy is Rome, of course"
+        )
+
+    def test_labels_buried_in_a_long_document_are_not_sections(self):
+        contract = "Clause text goes on and on. " * 800
+        assert not has_sections(
+            "Scope: this agreement covers all the services listed below\n"
+            + contract
+            + "\nNotes on completeness: this covers everything we agreed on"
+        )
+
+    def test_headers_with_nothing_under_them_are_not_sections(self):
+        # ipconfig once its dotted detail lines are stripped as output
+        assert not has_sections(
+            "Wireless LAN adapter WiFi:\n\n   Connection-specific DNS Suffix  . :\n"
+            "   IPv4 Address. . . . . . . : 10.0.0.2\n"
+            "Ethernet adapter Ethernet 2:\n\n   Connection-specific DNS Suffix  . :\n"
+            "   Media State . . . . . . . : Media disconnected"
+        )
 
     def test_bare_bullets_alone_are_not_sections(self):
         """Deliberately distinct from has_constraints' implicit-list
