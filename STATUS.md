@@ -17,18 +17,23 @@ never see it). See "Live state and open items" below. 433 tests.
   almost never be on screen; the phase 3 SessionStart line already carries
   the same information into desktop sessions. DECISIONS.md has the rest.
 
-## Live state and open items (2026-09-24, second wrap-up)
+## Live state and open items (2026-09-24, third wrap-up)
 
-- **Live on `dev`**: `main` at `77e408c` (PRs #2-#7 merged). Installed CLI
-  rebuilt from `9b0e0ad` (phase 3) with a forced refresh; #7 changed only
-  build settings and tests, so no reinstall was needed after it, and from
-  #7 on a plain `uv tool install --force .` rebuilds correctly. Plugin
+- **Live on `dev`**: `main` at `5fdb70b` (PRs #2-#9 merged; plugin plan
+  phases 1-4 done). Installed CLI rebuilt from `9b0e0ad` (phase 3) with a
+  forced refresh; #7-#9 changed only build settings, CI, tests and docs, so
+  no reinstall was needed after them, and from #7 on a plain
+  `uv tool install --force .` rebuilds correctly. Plugin
   enabled from the `/home/alistair/projects/prompt-coach` directory
   marketplace, so hook/skill changes load in place at the next session.
 - **Verified on the installed build**: `discover` reads Claude Code
   sessions again; a real `claude -p` session (temp copy of the cache) showed
   the SessionStart summary and the model confirmed it wasn't in its
   context; the paste tip and scoring fixes respond through the plugin hook.
+- **Not yet verified**: that the SessionStart line is actually *displayed*
+  in the Claude desktop app. It was checked via `claude -p` stream-json
+  (terminal), not on screen in the desktop UI, where almost all sessions
+  run. Confirm on the next new desktop session.
 - **Legacy setup backups** (from `migrate-legacy`):
   `~/.claude/settings.json.bak-20260924-172300` (plus a manual
   `.bak-manual-20260924-172259`) and `~/.claude/commands/*.md.bak-20260924-172300`.
