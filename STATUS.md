@@ -45,15 +45,20 @@ has `pastedContents` but only the terminal CLI writes it, last on Sep 10).
   (27) or nothing (12). One false positive found and fixed before merge (a
   typed "Can you help me fix: Hermes [9:00 PM]"). Each rule mutation-checked.
 
-## Live state and open items (2026-09-24, fifth wrap-up)
+## Live state and open items (2026-09-24, sixth wrap-up)
 
-- **Live on `dev`**: `main` at `8c520d3` (PRs #2-#13 merged; plugin plan
-  phases 1-4 done, paste detection complete). Installed CLI rebuilt from
-  `8c520d3` with a plain `uv tool install --force .` (#7's cache-keys make
+- **Live on `dev`**: `main` at `df7d77c` (PRs #2-#15 merged; plugin plan
+  phases 1-4 done, paste detection complete, Hermes classification done).
+  Installed CLI rebuilt from `df7d77c` with a plain `uv tool install --force .` (#7's cache-keys make
   that rebuild without extra flags). Plugin enabled from the `/home/alistair/projects/
   prompt-coach` directory marketplace, so hook/skill changes load in place
   at the next session.
-- **Verified on the installed build**: #13's rules are live (a pasted
+- **Verified on the installed build**: #15 is live (installed
+  `HermesStore.parser_version` is 2; the first real `stats` run re-read
+  Hermes on its own: 2,827 -> 2,795 rows, 1,982 human, audit log kept at
+  16 rows; the next sync was incremental). 30-day `stats`: 3,967 human
+  prompts, example rate 1%, constraints 5%, structured output 1%.
+  #13's rules are live (a pasted
   PowerShell session leaves only the typed question as authored and earns
   no sections; a pure terminal paste is a bare paste; the artifact-comment
   relay is harness; a typed "Can you help me fix: Hermes [9:00 PM]" stays
@@ -71,7 +76,9 @@ has `pastedContents` but only the terminal CLI writes it, last on Sep 10).
   `.bak-manual-20260924-172259`) and `~/.claude/commands/*.md.bak-20260924-172300`.
 - **Plugin plan complete** (phases 1-4). Phase 4 = `claude plugin
   validate` in CI; the status-line offer was dropped (see below).
-- **Known limits**: none open for paste detection. The one remaining
+- **Known limits**: none open for paste detection. Hermes: 7 inlined
+  documents (`[Content of x]:`) are scored as typed text and left to paste
+  detection; 2 cli `/skill` invocations count as machine. The one remaining
   non-typed prompt with the sections bonus is a pasted handover spec that
   genuinely is structured, which is defensible.
 - **Other remote branches** not from this work, left alone:
