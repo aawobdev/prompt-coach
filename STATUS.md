@@ -1,7 +1,21 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-24 by Claude (Opus 5.5): second wrap-up. Plugin
-phases 1-3, the scoring/paste fixes and the reinstall fix are merged and
-live on `dev`; see "Live state and open items" below. 433 tests.
+Last updated: 2026-09-24 by Claude (Opus 5.5): plugin phase 4 -- CI now
+runs `claude plugin validate`; status-line offer dropped (you'd almost
+never see it). See "Live state and open items" below. 433 tests.
+
+## Plugin phase 4: CI validation, no status line (2026-09-24)
+
+- New `plugin` CI job: installs Claude Code (pinned `2.1.280`, bump
+  deliberately) and runs `claude plugin validate --strict` on `plugin/` and
+  the marketplace. Needs no login (checked in a clean HOME, no
+  credentials). Proven in real GitHub CI with a throwaway canary branch: a
+  misspelt manifest field failed the `plugin` job with a clear message
+  while `test` still passed; canary deleted.
+- **Status-line offer dropped.** Real usage, last 30 days: 211 sessions in
+  the Claude desktop app, 1 in the terminal CLI, 17 headless `claude -p`.
+  The docs present the status line as a terminal-UI feature, so it would
+  almost never be on screen; the phase 3 SessionStart line already carries
+  the same information into desktop sessions. DECISIONS.md has the rest.
 
 ## Live state and open items (2026-09-24, second wrap-up)
 
@@ -18,8 +32,8 @@ live on `dev`; see "Live state and open items" below. 433 tests.
 - **Legacy setup backups** (from `migrate-legacy`):
   `~/.claude/settings.json.bak-20260924-172300` (plus a manual
   `.bak-manual-20260924-172259`) and `~/.claude/commands/*.md.bak-20260924-172300`.
-- **Next**: optional plugin phase 4 (status-line offer in `setup`,
-  `claude plugin validate` in CI).
+- **Plugin plan complete** (phases 1-4). Phase 4 = `claude plugin
+  validate` in CI; the status-line offer was dropped (see below).
 - **Known limits** (DECISIONS.md 2026-09-24): pasted documents (form
   fields, contracts, help text) still read as sections about half the time;
   any percentage in a bullet counts as a constraint.
