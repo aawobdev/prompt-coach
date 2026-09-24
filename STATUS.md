@@ -142,11 +142,11 @@ New persistent audit log in the cache DB (~/.cache/prompt-coach/cache.db,
 entry captures timestamp, session ID, source, mode, trigger, original prompt,
 refined prompt (when available), and estimated token savings.
 
-- `prompt-coach audit` — summary table (interventions, avg/total tokens saved,
+- `prompt-coach audit`: summary table (interventions, avg/total tokens saved,
   rewrites per mode)
-- `prompt-coach audit --detail` — individual entries with before/after text
-- `prompt-coach audit --mode auto --since 7d` — filter by mode and time range
-- `prompt-coach audit --mode coach --detail --limit 10` — last 10 coach blocks
+- `prompt-coach audit --detail`: individual entries with before/after text
+- `prompt-coach audit --mode auto --since 7d`: filter by mode and time range
+- `prompt-coach audit --mode coach --detail --limit 10`: last 10 coach blocks
 
 For auto mode, the refined prompt is logged as null (the session model does
 the refinement internally and the hook never sees it), but the original prompt
