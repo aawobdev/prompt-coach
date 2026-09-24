@@ -25,18 +25,20 @@ has `pastedContents` but only the terminal CLI writes it, last on Sep 10).
   (27) or nothing (12). One false positive found and fixed before merge (a
   typed "Can you help me fix: Hermes [9:00 PM]"). Each rule mutation-checked.
 
-## Live state and open items (2026-09-24, fourth wrap-up)
+## Live state and open items (2026-09-24, fifth wrap-up)
 
-- **Live on `dev`**: `main` at `3412e7c` (PRs #2-#11 merged; plugin plan
-  phases 1-4 done, paste-detection known limits fixed). Installed CLI
-  rebuilt from `3412e7c` with a plain `uv tool install --force .`, which
-  rebuilt on its own thanks to #7's cache-keys (#11 didn't touch
-  pyproject.toml). Plugin enabled from the `/home/alistair/projects/
+- **Live on `dev`**: `main` at `8c520d3` (PRs #2-#13 merged; plugin plan
+  phases 1-4 done, paste detection complete). Installed CLI rebuilt from
+  `8c520d3` with a plain `uv tool install --force .` (#7's cache-keys make
+  that rebuild without extra flags). Plugin enabled from the `/home/alistair/projects/
   prompt-coach` directory marketplace, so hook/skill changes load in place
   at the next session.
-- **Verified on the installed build**: #11's rules are live (pasted form
-  fields no longer count as sections, typed ones do; a bare "72%" is not a
-  constraint, "below 50%" is); `discover` reads Claude Code sessions again;
+- **Verified on the installed build**: #13's rules are live (a pasted
+  PowerShell session leaves only the typed question as authored and earns
+  no sections; a pure terminal paste is a bare paste; the artifact-comment
+  relay is harness; a typed "Can you help me fix: Hermes [9:00 PM]" stays
+  authored); #11's rules too (pasted form fields aren't sections, a bare
+  "72%" isn't a constraint); `discover` reads Claude Code sessions again;
   a real `claude -p` session (temp copy of the cache) showed the
   SessionStart summary and the model confirmed it wasn't in its context;
   the paste tip and scoring fixes respond through the plugin hook.
