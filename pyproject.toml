@@ -38,6 +38,9 @@ ignore = ["S105", "S106"]
 "src/prompt_coach/llm/prompts.py" = ["E501"]
 # Fixed git binary, args are local filesystem paths only, not untrusted input.
 "src/prompt_coach/analysis/docs.py" = ["S603", "S607"]
+# Fixed `uv`/`claude` binaries; args are a literal subcommand plus a
+# filesystem path this same process resolved, not untrusted input.
+"src/prompt_coach/plugin.py" = ["S603"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["typer.Argument", "typer.Option"]

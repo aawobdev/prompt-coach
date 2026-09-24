@@ -1041,3 +1041,58 @@ version drift, and the version-equality test needs one repo).
 `ORIGINAL_COMMAND`, docstrings), cli.py docstring, README, AGENTS.md
 (carve-out: the plugin is a product, not agent guidance), tests/test_plugin.py.
 **Decided by**: Alistair (go-ahead on the plan), 2026-09-20.
+
+## 2026-09-24 - Plugin install/migration: shell out to `claude` for install, hand-edit only what has no CLI equivalent
+
+**Trigger**: phase 1 shipped the plugin but nothing installs it or removes
+the legacy hooks it replaces -- a fresh machine still needed the manual
+steps from the README. Phase 2 of the plan (STATUS.md 2026-09-20).
+**Decision**: split install-migration cleanly by whether `claude` itself
+has a command for it. Installing (registering this repo as a marketplace,
+enabling the plugin) shells out to `claude plugin marketplace add` +
+`claude plugin install ... -y` -- `claude` owns `enabledPlugins`/
+`extraKnownMarketplaces`, so this never hand-writes that part of
+settings.json. Removing the legacy hand-authored hooks has no `claude`
+command (there's no "remove this one hook"), so that part IS surgical
+hand-edited JSON: match only the exact legacy shell-form command
+(`.../prompt-coach nudge`, no `args` key), never the plugin's own exec-form
+hook (`${CLAUDE_PLUGIN_ROOT}/scripts/pc`, args `["nudge"]`) even when both
+are present at once (the state right after installing but before
+migrating). Every write is planned first (`plan_migration`, inspectable,
+no I/O) and confirmed before anything touches disk; settings.json and
+every legacy command file get a `<name>.bak-<timestamp>` backup first,
+matching the convention already used by hand for `CLAUDE.md` on this
+machine.
+**Repo-root discovery**: rejected a new marker file or a `[plugin]` key in
+config.toml (would touch the tested Config round-trip schema for one
+optional field). `uv tool install .` already records the source directory
+in its own receipt (`uv tool dir`/`<name>/uv-receipt.toml`,
+`tool.requirements[0].directory`) -- reused as-is, verified against the
+real receipt on this machine. Falls back to `--repo` when `uv` is missing,
+this wasn't uv-tool-installed, or the receipt is stale.
+**Verified live, not just under mocks** (worth recording because it caught
+a real bug the mocked tests missed): a hook-removal plan captured before
+`install_plugin()` ran clobbered the real `claude` CLI's own write to the
+same settings.json a moment later when applied after. Found by running the
+actual sequence against a sandboxed `~/.claude` with the real `claude`
+binary end to end, twice. Fixed by re-reading the plan fresh right before
+the removal write, whenever an install happened first. The regression
+test's install mock now writes to the file the way the real CLI does.
+Separately found and unrelated to this repo: `~/.hermes/node/.../bin/
+claude.exe` is a broken 500-byte postinstall stub as of 2026-09-23 (some
+Hermes-side npm reinstall didn't complete); the working binary on this
+machine is Claude Code Desktop's own bundled CLI (`$CLAUDE_CODE_EXECPATH`).
+Flagged to Alistair separately, not fixed here.
+**Alternatives considered**: hand-writing `enabledPlugins`/
+`extraKnownMarketplaces` ourselves instead of shelling out to `claude`
+(rejected: reinvents bookkeeping `claude` already owns correctly, and
+would silently drift from its schema); a single flat "always reinstall
+everything" command with no plan/confirm step (rejected: violates
+"confirm before destructive/outward-facing changes").
+**Affects**: plugin.py (new), cli.py (`doctor`, `migrate-legacy`,
+`_claude_home`, `_execute_migration`, `_offer_plugin_setup`), pyproject.toml
+(ruff per-file-ignore for the two `claude`/`uv` subprocess calls),
+tests/test_plugin_migrate.py (new, 37 tests), tests/test_cli.py (20 new
+tests + `PROMPT_COACH_CLAUDE_HOME`/`find_repo_root` isolation in the shared
+`env` fixture), README. 370 tests (up from 318).
+**Decided by**: Alistair (go-ahead: "Start phase 2"), 2026-09-24.

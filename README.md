@@ -45,6 +45,8 @@ uv run prompt-coach import chatgpt-export.zip   # ChatGPT official data export
 | `nudge` | Hook target for Claude Code (`UserPromptSubmit` + `Stop`) and Hermes (`pre_llm_call`). On Claude Code, default `coach` mode blocks weak prompts with an LLM-rewritten suggestion (degrades to a one-line tip if the LLM is unreachable), once per session; `always` mode blocks and rewrites every prompt; `off` disables it. On Hermes, `pre_llm_call` can only inject context, not block, so it's always tip-only regardless of mode (`always` collapses to `coach`'s behavior there). Set via `PROMPT_COACH_NUDGE_MODE` or `[nudge] mode` in config.toml. Not meant to be run by hand. |
 | `import` | Import a ChatGPT export (ZIP/JSON) or simple JSON sessions; format auto-detected |
 | `nudge-consume` | Internal target for the `/prompt-coach:accept` / `/prompt-coach:original` plugin skills below -- pops the pending rewrite for a session and prints one side of it. Not meant to be run by hand. |
+| `doctor` | Read-only report: is the `claude` CLI on PATH, is the plugin installed, are the legacy hooks/commands it replaces still present (`--json` for scripting). |
+| `migrate-legacy` | Installs the plugin (via `claude plugin marketplace add`/`install`) and/or removes the legacy hooks/commands, whichever is needed. Shows the plan and asks to confirm; backs up everything it touches first. `--repo` overrides auto-detection, `--dry-run` previews only, `--yes` skips confirmation. |
 | `cache sync/info/clear` | Manage the local analysis cache |
 
 ## Claude Code plugin
@@ -87,11 +89,14 @@ old short names `/coach-accept` and `/coach-original` became
 
 **Migrating from the manual setup:** Claude Code does not de-duplicate a
 plugin's hooks against the same hooks in `~/.claude/settings.json`, so
-remove the two `prompt-coach nudge` entries (`UserPromptSubmit`, `Stop`)
-from `settings.json` when you install the plugin, or every prompt is
-nudged twice. The old `~/.claude/commands/{coach-accept,coach-original,prompt-coach}.md`
-files can be deleted. (A `setup`/`doctor` command to automate this is the
-next planned step; see STATUS.md.)
+running both at once nudges every prompt twice. Run `prompt-coach
+migrate-legacy` (or say yes when `prompt-coach setup` offers it): it
+installs the plugin if it isn't already, removes the two legacy
+`prompt-coach nudge` hook entries and the three old
+`~/.claude/commands/*.md` files, and backs up everything it touches first
+(`<file>.bak-<timestamp>`, same convention either way). `prompt-coach
+doctor` reports the current state without changing anything, including
+whether both the plugin and the legacy hooks are active at once.
 
 ## Wiring `nudge` into Hermes
 
