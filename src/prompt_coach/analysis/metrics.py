@@ -82,6 +82,27 @@ _OUTPUT_LINE = re.compile(
     re.VERBOSE,
 )
 _TB_FRAME = re.compile(r'\s+File ".*", line \d+')
+# Markers of a pasted terminal session or chat log: a shell prompt line
+# (with or without a command after it), a chat header ("Hermes  [7:30 PM]";
+# the speaker part has no colon, so a typed "Can you help me fix: Hermes
+# [9:00 PM]" line stays authored),
+# a bare "[7:30 PM]", WhatsApp's "[15:19, 10/09/2026] Name:"), or Slack's
+# "(edited)". Between the first and last marker everything is session or
+# chat content, whatever its shape -- line-by-line rules can't tell a bot's
+# prose reply or a tool's help text from typed sections (both were still
+# earning the sections bonus on the real corpus, 2026-09-24).
+_SESSION_MARKER = re.compile(
+    r"""\s*(?:
+        PS\ [A-Za-z]:\\[^>\n]*>(?:\s|$)
+      | [\w.-]+@[\w.-]+:[^\n]*[$\#](?:\s|$)
+      | \$(?:\s|$)
+      | [^\s\[\]:][^\[\]:\n]{0,30}?\s+\[\d{1,2}:\d{2}(?::\d{2})?\s?(?:[AP]M)?\]\s*$
+      | \[\d{1,2}:\d{2}(?::\d{2})?\s?(?:[AP]M)?\]\s*$
+      | \[\d{1,2}:\d{2},\ \d{1,2}/\d{1,2}/\d{2,4}\]
+      | \(edited\)"?\s*$
+    )""",
+    re.VERBOSE,
+)
 # "Label: value" -- 5+ of these in a row is a key-value dump (systemd
 # status, motd, form fields pasted from a document), not authored
 # sections. 5, not fewer, so a compact typed spec ("Goal: / Context: /
@@ -174,7 +195,8 @@ def estimate_tokens(text: str) -> float:
 @lru_cache(maxsize=2048)
 def authored_text(text: str) -> str:
     """The part of a prompt someone actually typed: `text` minus fenced
-    blocks, recognisable machine-output lines, and key-value dumps.
+    blocks, pasted terminal sessions and chat logs, recognisable
+    machine-output lines, and key-value dumps.
 
     Every structure signal below (examples, constraints, output format,
     sections) is read from this, not the raw text, so pasted material can't
@@ -184,6 +206,16 @@ def authored_text(text: str) -> str:
     each signal calls it for the same prompt."""
     lines = _FENCE.sub("\n", text).splitlines()
     keep = [not _OUTPUT_LINE.match(line) for line in lines]
+    # A pasted terminal session or chat log: everything from the first
+    # marker to the last, plus the block straight after the last one (its
+    # output or message) up to a blank line. Typed text before the session,
+    # and a typed question after a blank line, stay authored.
+    markers = [i for i, line in enumerate(lines) if _SESSION_MARKER.match(line)]
+    if markers:
+        end = markers[-1] + 1
+        while end < len(lines) and lines[end].strip():
+            end += 1
+        keep[markers[0] : end] = [False] * (end - markers[0])
     # A traceback frame line is followed by an echo of the source line it
     # points at (`    foo()`), which on its own looks like any indented text.
     for i in range(1, len(lines)):

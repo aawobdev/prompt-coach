@@ -423,3 +423,59 @@ class TestPasteDetection:
         result = score_breakdown(TRACEBACK)
         assert result["score"] < 40
         assert "Mostly pasted, little instruction" in [p[0] for p in result["penalties"]]
+
+
+class TestPastedSessionsAndChats:
+    """Provenance, not shape: a pasted terminal session or chat log is
+    stripped from the authored text between its first and last marker, so a
+    tool's help text or a bot's prose reply inside it can't earn structure
+    signals (real corpus 2026-09-24: both still earned the sections bonus)."""
+
+    PS_SESSION = (
+        "PowerShell 7.6.5\n"
+        "PS C:\\Windows\\System32> wsl --help\n"
+        "Usage: wsl.exe [Argument] [Options...] [CommandLine]\n"
+        "Parameters:\n"
+        "    --distribution, -d <Distro> run the specified distribution for this call\n"
+        "Remarks: the default distribution is used when no distribution is given at all\n"
+        "PS C:\\Windows\\System32>"
+    )
+    SLACK = (
+        "Hermes  [7:30 PM]\n"
+        "Let me check both the repo docs and the skills.\n"
+        "(edited)\n"
+        "[7:31 PM]\n"
+        "The pattern: keep one canonical file that both tools read from the repo.\n"
+        "For Claude: point CLAUDE.md at AGENTS.md so it loads the same guidance.\n"
+        "For Hermes: load the same file through its skills directory on start.\n"
+        "(edited)"
+    )
+
+    def test_session_between_prompts_is_not_authored(self):
+        text = "Why does wsl ignore my distro flag?\n\n" + self.PS_SESSION
+        assert authored_text(text).split("\n")[0] == "Why does wsl ignore my distro flag?"
+        assert "Usage" not in authored_text(text)
+        assert not has_sections(text)
+
+    def test_a_typed_question_after_a_blank_line_stays_authored(self):
+        text = self.PS_SESSION + "\nsome trailing output\n\nWhat does that remark mean for me?"
+        assert authored_text(text).strip().endswith("What does that remark mean for me?")
+
+    def test_unix_prompt_session(self):
+        text = "alistair@dev:~$ git status\nOn branch main\nnothing to commit"
+        assert authored_text(text).strip() == ""
+        assert is_bare_paste(text + "\n" + "working tree clean and everything is fine " * 3)
+
+    def test_chat_log_is_not_authored(self):
+        text = "Is this the right way to share skills between tools?\n" + self.SLACK
+        assert authored_text(text).strip() == "Is this the right way to share skills between tools?"
+        assert not has_sections(text)
+
+    def test_whatsapp_export_is_not_authored(self):
+        text = "Rough numbers below.\n[19:21, 17/09/2026] Alistair: Design: 3 days\nBuild: 5 days"
+        assert authored_text(text).strip() == "Rough numbers below."
+
+    def test_typed_text_mentioning_a_speaker_and_time_stays_authored(self):
+        # A chat speaker name has no colon; a typed ask before it does.
+        text = "Can you help me fix: Hermes  [9:00 PM]"
+        assert authored_text(text) == text

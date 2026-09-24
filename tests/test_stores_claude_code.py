@@ -221,3 +221,15 @@ def test_discover_and_iter_prompts(tmp_path):
 def test_missing_dir_unavailable(tmp_path):
     info = ClaudeCodeStore(tmp_path / "nope").discover()
     assert not info.available
+
+
+def test_artifact_comment_relay_is_rejected():
+    """The desktop app's artifact-comment relay is an app-generated payload
+    (seen live 2026-09-24), not a typed prompt."""
+    content = (
+        "[Artifact comment sent to Claude]\n"
+        "Artifact: https://claude.ai/code/artifact/abc\n"
+        "Comment thread: c6aa00e3\n\n"
+        "I sent you this comment from the artifact's comment thread."
+    )
+    assert parse_line(line(message={"role": "user", "content": content})) is None
