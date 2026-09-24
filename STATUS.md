@@ -1,7 +1,20 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-24 by Claude (Opus 5.5): plugin phase 3 -- a
-`SessionStart` hook shows a one-line coaching summary when a session
-starts. 432 tests.
+Last updated: 2026-09-24 by Claude (Opus 5.5): `uv tool install --force .`
+now always installs the current source (it was silently reusing stale
+builds). Phase 3 live on `dev`. 433 tests.
+
+## Reinstall no longer reuses stale builds (2026-09-24)
+
+`uv tool install --force .` (install.sh and the pull-and-reinstall deploy
+step) reused uv's cached wheel whenever pyproject.toml hadn't changed, so a
+merge could deploy the *previous* code with no error. Caught live: after
+merging phase 3 the SessionStart hook returned nothing until a forced
+rebuild. `[tool.uv] cache-keys` (pyproject.toml) now keys the build on
+`src/**/*.py`, `src/**/*.j2` and the git commit.
+`tests/test_install_freshness.py` reproduces the deploy step (install,
+code-only commit, reinstall) and fails without the setting (mutation-checked).
+Phase 3 verified live on `dev` after the rebuild: a real session showed the
+summary, and the model confirmed it wasn't in its context.
 
 ## Plugin phase 3: SessionStart summary (2026-09-24)
 

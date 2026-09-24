@@ -21,6 +21,21 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/prompt_coach"]
 
+[tool.uv]
+# Rebuild the package whenever its source or commit changes. By default uv
+# caches the wheel it builds from a local directory and only rebuilds when
+# pyproject.toml/setup.py/setup.cfg change, so `uv tool install --force .`
+# (install.sh, and the pull-and-reinstall deploy step) silently reinstalled
+# the previous build after a merge that didn't touch pyproject.toml --
+# happened live 2026-09-24 with the SessionStart hook. Guarded by
+# tests/test_install_freshness.py.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "src/**/*.py" },
+    { file = "src/**/*.j2" },
+    { git = { commit = true } },
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
