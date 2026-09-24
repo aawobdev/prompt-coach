@@ -1168,3 +1168,20 @@ added and mutation-checked.
 dispatch), streaks.py, plugin/hooks/hooks.json, README, tests.
 **Decided by**: Alistair ("start phase 3"), 2026-09-24.
 
+## 2026-09-24 - uv cache-keys so reinstall always builds the current source
+
+**Trigger**: after merging phase 3, `uv tool install --force .` reported
+success but installed the previous build; the SessionStart hook returned
+nothing. uv caches wheels built from local directories and by default only
+rebuilds when pyproject.toml/setup.py/setup.cfg change.
+**Decision**: `[tool.uv] cache-keys` on pyproject.toml, `src/**/*.py`,
+`src/**/*.j2` and the git commit, so the standard install/deploy command is
+correct without extra flags. Chosen over adding `--reinstall
+--refresh-package prompt-coach` to install.sh and the docs: that fixes one
+command, while cache-keys fixes every way the package gets installed.
+**Verified**: reproduced in an isolated tool dir (stale without the
+setting, fresh with it); `tests/test_install_freshness.py` runs the same
+install / code-only commit / reinstall sequence and fails without it.
+**Affects**: pyproject.toml, tests/test_install_freshness.py.
+**Decided by**: Alistair ("open the PR and merge it"), 2026-09-24.
+
