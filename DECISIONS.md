@@ -1259,3 +1259,25 @@ terminal sessions, now getting the accurate paste tip.
 **Affects**: analysis/metrics.py, stores/base.py, tests.
 **Decided by**: Alistair ("fix the remaining paste gap"), 2026-09-24.
 
+## 2026-09-24 - Hermes rows: unwrap gateway metadata, classify by session source; parser_version re-reads the cache
+
+**Trigger**: "check my stats" showed a 16% example rate. About 700 Hermes
+"user" rows were cron jobs, subagent tasks and agent notices, and most
+Slack rows carried quoted bot text or an injected skill body.
+**Decision**: (1) `cron`/`subagent` session source means machine. (2)
+Strip leading gateway wrappers (reply quote, thread replay, notices by
+bracket balance, speaker label, skill body up to its fixed closing
+sentence) and score only what's left. (3) What's left opening with an
+agent notice is machine; another speaker's label drops the row; a wrapper
+with no end is machine rather than guessed at. (4) A per-store
+`parser_version` in the cache purges and re-reads that store on change.
+**Alternatives considered**: `cache clear` plus resync (rejected: it also
+deletes `audit_log`, which the SessionStart summary reads); UPSERT on
+sync (rejected: rewrites every row every sync and still leaves stale FTS
+entries); a configured owner name (rejected for now: the dominant speaker
+label is right on real data and needs no setup).
+**Result**: 30-day human prompts 4,650 -> 3,952; example rate 16% -> 1%.
+**Affects**: stores/hermes.py, stores/base.py (`CARD n of n`), cache.py,
+tests, AGENTS.md.
+**Decided by**: Alistair ("yes, fix the hermes classification"), 2026-09-24.
+

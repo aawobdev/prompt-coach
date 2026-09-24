@@ -51,8 +51,18 @@ conventions (uv, ruff, black, pytest, src-layout, STATUS/DECISIONS docs).
   IDE-context block; strip down to the text after the
   `## My request for Codex:` marker when present.
 - **JSON import**: list of sessions with `messages:[{role, content}]`.
-- Hermes "user" rows include machine-generated `hermes -z` task specs
-  (`TASK:` prefixes): classify origin human/machine and segment all analysis.
+- Hermes "user" rows are every turn the agent received, not just what was
+  typed (verified live 2026-09-24, 2,829 rows). Rows from `cron` and
+  `subagent` sessions are all machine (739 + 5). Slack/cli rows wrap the
+  typed text in gateway metadata: `[Replying to: "<bot text>"]` (1,428),
+  a thread-context replay (405), `[alistair] ` speaker labels, attachment
+  and model-switch notices, and whole injected `SKILL.md` bodies (126).
+  `stores/hermes.py` `unwrap()` strips them; what's left starting
+  `[System:` / `[IMPORTANT:` / compaction markers is the agent talking to
+  itself (machine), and another speaker's label (`[Jamie]`) drops the row.
+  `hermes -z` task specs (`TASK:`, `CARD n of n`) are machine too. Bump
+  `HermesStore.parser_version` when this changes: the cache re-reads the
+  store on a mismatch (a forced sync alone never rewrites cached rows).
 - **Never write to any source store.** All derived state lives in
   `~/.cache/prompt-coach/` and is disposable.
 

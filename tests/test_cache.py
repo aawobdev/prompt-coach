@@ -326,3 +326,39 @@ class TestAuditLog:
         assert events[0]["session_id"] == "s4"  # newest first
         assert events[1]["session_id"] == "s3"
         assert events[2]["session_id"] == "s2"
+
+
+class VersionedStore(FakeStore):
+    """A watermark store whose parser changed what it yields for old rows."""
+
+    def __init__(self, prompts, version):
+        super().__init__(prompts)
+        self.parser_version = version
+
+
+def test_parser_version_bump_rereads_cached_rows(cache):
+    cache.sync([VersionedStore([make_prompt("a", "[wrapper] fix it")], 1)])
+    stats = cache.sync([VersionedStore([make_prompt("a", "fix it")], 2)])
+    assert stats.added == 1
+    assert [p.content for p in cache.prompts(limit=5)] == ["fix it"]
+    assert [p.content for p in cache.search("fix")] == ["fix it"]
+    assert cache.search("wrapper") == []  # no stale index entry for the old read
+    # Recorded: the next plain sync is incremental again.
+    assert cache.sync([VersionedStore([make_prompt("a", "fix it")], 2)]).added == 0
+
+
+def test_store_without_parser_version_is_never_purged(cache):
+    cache.sync([FakeStore([make_prompt("a", "fix it")])])
+    stats = cache.sync([FakeStore([make_prompt("a", "fix it")])], force=True)
+    assert (stats.added, stats.deduped) == (0, 1)
+
+
+def test_parser_version_purge_only_touches_that_store(cache):
+    other = FakeStore([make_prompt("a", "keep me")])
+    hermes = VersionedStore([make_prompt("h", "old read", source=SourceKind.HERMES)], 1)
+    hermes.kind = SourceKind.HERMES
+    cache.sync([other, hermes])
+    hermes2 = VersionedStore([make_prompt("h", "new read", source=SourceKind.HERMES)], 2)
+    hermes2.kind = SourceKind.HERMES
+    cache.sync([hermes2])
+    assert sorted(p.content for p in cache.prompts(limit=5)) == ["keep me", "new read"]

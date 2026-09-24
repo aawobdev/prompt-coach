@@ -19,7 +19,8 @@ _MACHINE_PATTERNS = re.compile(
         TASK\s*[:\d] |
         Task\ spec\s*: |
         One-shot\ task\s*: |
-        HANDOFF\s*:
+        HANDOFF\s*: |
+        CARD\s+\d+\s+of\s+\d+\b
     )""",
     re.VERBOSE,
 )
