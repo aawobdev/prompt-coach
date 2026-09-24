@@ -1,0 +1,10 @@
+{
+  "name": "prompt-coach",
+  "version": "0.1.0",
+  "description": "Local-first prompt coaching: nudges weak prompts, offers rewrites, and shortcuts to reports. Needs the prompt-coach CLI on the machine.",
+  "author": {
+    "name": "Alistair"
+  },
+  "repository": "https://github.com/aawobdev/prompt-coach",
+  "keywords": ["prompts", "coaching", "hooks"]
+}

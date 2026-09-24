@@ -1,0 +1,29 @@
+{
+  "description": "prompt-coach nudge: weak-prompt detection before send, hint tips after the response",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/pc",
+            "args": ["nudge"],
+            "timeout": 25
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/pc",
+            "args": ["nudge"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

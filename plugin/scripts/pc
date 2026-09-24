@@ -1,0 +1,36 @@
+#!/bin/sh
+# prompt-coach plugin launcher: find the prompt-coach CLI and exec it.
+#
+# Why this exists: a plugin's bin/ is only on the Bash tool's PATH, not
+# guaranteed for hooks, and hook environments (desktop app, IDE) can have a
+# thinner PATH than a login shell. So look in PATH first, then where
+# `uv tool install` puts it.
+#
+# Fail-open: a hook must never block a prompt because the CLI is missing.
+# POSIX sh and shell builtins only, so it works with a nearly empty PATH.
+
+for candidate in \
+    "$(command -v prompt-coach 2>/dev/null)" \
+    "$HOME/.local/bin/prompt-coach" \
+    "${UV_TOOL_BIN_DIR:+$UV_TOOL_BIN_DIR/prompt-coach}"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        exec "$candidate" "$@"
+    fi
+done
+
+case "$1" in
+    nudge)
+        # Hook call: warn once (marker file), then stay silent.
+        marker="${TMPDIR:-/tmp}/.prompt-coach-missing-cli-${USER:-user}"
+        if [ ! -e "$marker" ]; then
+            : > "$marker" 2>/dev/null
+            echo '{"systemMessage":"prompt-coach plugin: the prompt-coach CLI was not found, so nudging is off. Run ./install.sh in the prompt-coach repo (uv tool install)."}'
+        else
+            echo '{}'
+        fi
+        ;;
+    *)
+        echo "prompt-coach CLI not found. Run ./install.sh in the prompt-coach repo (uv tool install)."
+        ;;
+esac
+exit 0

@@ -267,8 +267,8 @@ class TestBuildResponseAutoMode:
 
 
 class TestPendingRewrite:
-    """/coach-accept and /coach-original (~/.claude/commands/, not part of
-    this package) resend one side of a block via `nudge-consume`, which
+    """/prompt-coach:accept and /prompt-coach:original (plugin skills under
+    plugin/, not part of this package) resend one side of a block via `nudge-consume`, which
     calls consume_pending_rewrite. A block must stash {original, rewritten}
     for that to work, and the resend it triggers must not be immediately
     held back again."""
@@ -280,8 +280,8 @@ class TestPendingRewrite:
         )
         cfg = make_cfg(tmp_path)
         resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
-        assert "/coach-accept" in resp["reason"]
-        assert "/coach-original" in resp["reason"]
+        assert "/prompt-coach:accept" in resp["reason"]
+        assert "/prompt-coach:original" in resp["reason"]
 
     def test_consume_returns_rewritten_or_original(self, tmp_path, monkeypatch):
         monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
@@ -316,7 +316,7 @@ class TestPendingRewrite:
         assert consume_pending_rewrite(cfg.cache_dir, "s1", "original") == LONG_WEAK
 
     def test_resend_after_consume_is_not_immediately_reblocked(self, tmp_path, monkeypatch):
-        """Simulates /coach-original: the session already used its
+        """Simulates /prompt-coach:original: the session already used its
         once-per-session gate on the block, so this only proves the
         explicit skip flag also works for e.g. "always" mode, which has no
         such gate."""

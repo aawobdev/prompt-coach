@@ -44,26 +44,54 @@ uv run prompt-coach import chatgpt-export.zip   # ChatGPT official data export
 | `query` | Natural-language question over your prompt history, with citations |
 | `nudge` | Hook target for Claude Code (`UserPromptSubmit` + `Stop`) and Hermes (`pre_llm_call`). On Claude Code, default `coach` mode blocks weak prompts with an LLM-rewritten suggestion (degrades to a one-line tip if the LLM is unreachable), once per session; `always` mode blocks and rewrites every prompt; `off` disables it. On Hermes, `pre_llm_call` can only inject context, not block, so it's always tip-only regardless of mode (`always` collapses to `coach`'s behavior there). Set via `PROMPT_COACH_NUDGE_MODE` or `[nudge] mode` in config.toml. Not meant to be run by hand. |
 | `import` | Import a ChatGPT export (ZIP/JSON) or simple JSON sessions; format auto-detected |
-| `nudge-consume` | Internal target for the `/coach-accept` / `/coach-original` slash commands below -- pops the pending rewrite for a session and prints one side of it. Not meant to be run by hand. |
+| `nudge-consume` | Internal target for the `/prompt-coach:accept` / `/prompt-coach:original` plugin skills below -- pops the pending rewrite for a session and prints one side of it. Not meant to be run by hand. |
 | `cache sync/info/clear` | Manage the local analysis cache |
 
-## Claude Code slash commands
+## Claude Code plugin
 
-`~/.claude/commands/prompt-coach.md` (global, any project) runs
-`/prompt-coach report --since 7d`, `/prompt-coach dash --plain`, etc. -- any
-`prompt-coach` subcommand, passed straight through. Not part of this repo
-(it's Claude Code user config), but worth knowing it exists.
+The hooks and slash commands ship as a Claude Code plugin in `plugin/`
+(marketplace manifest at `.claude-plugin/marketplace.json`). It is a thin
+wrapper: the hooks and skills call the installed `prompt-coach` CLI through
+`plugin/scripts/pc`, a fail-open launcher that looks for the CLI on `PATH`,
+then `~/.local/bin` (where `uv tool install` puts it). If the CLI is
+missing it warns once and lets every prompt through.
 
-`~/.claude/commands/coach-accept.md` and `~/.claude/commands/coach-original.md`
-are the closest thing Claude Code's hook contract allows to a button on a
-`nudge` block: `UserPromptSubmit` can only `block` (text reason) or
-`continue`, there's no interactive-choice mechanism, so a real accept/reject
-button isn't possible. Instead, when `nudge` blocks a prompt with a rewrite
-it also stashes `{original, rewritten}` keyed by session ID
-(`~/.cache/prompt-coach/nudge_pending.json`). `/coach-accept` resends the
-rewrite; `/coach-original` resends your prompt untouched; both mark the
-session to skip the nudge gate once, so the resend isn't immediately held
-back again. Also global user config, not part of this repo.
+Install (the CLI first, via `./install.sh`):
+
+```bash
+claude plugin marketplace add aawobdev/prompt-coach   # or a local path to this repo
+claude plugin install prompt-coach@prompt-coach
+```
+
+What it registers:
+
+| Piece | What it does |
+|---|---|
+| `UserPromptSubmit` hook (25s) | Runs `prompt-coach nudge`: scores the prompt, blocks with a rewrite (coach/always) or injects the refine directive (auto). |
+| `Stop` hook (10s) | Runs `prompt-coach nudge` for the hint-mode tip. |
+| `/prompt-coach:accept` | Resends the rewrite `nudge` held back. |
+| `/prompt-coach:original` | Resends your original prompt untouched. |
+| `/prompt-coach:run <cmd>` | Runs any `prompt-coach` subcommand (`report --since 7d`, `dash --plain`, ...). |
+
+`UserPromptSubmit` can only `block` (text reason) or add context, so there
+is no real accept/reject button. Instead, when `nudge` blocks a prompt with
+a rewrite it stashes `{original, rewritten}` keyed by session ID
+(`~/.cache/prompt-coach/nudge_pending.json`). `accept` resends the rewrite;
+`original` resends your prompt; both mark the session to skip the nudge
+gate once, so the resend isn't held back again. The three skills are
+user-only (`disable-model-invocation`), so Claude cannot trigger them.
+
+Plugin skills are always namespaced `/<plugin>:<skill>`, which is why the
+old short names `/coach-accept` and `/coach-original` became
+`/prompt-coach:accept` and `/prompt-coach:original`.
+
+**Migrating from the manual setup:** Claude Code does not de-duplicate a
+plugin's hooks against the same hooks in `~/.claude/settings.json`, so
+remove the two `prompt-coach nudge` entries (`UserPromptSubmit`, `Stop`)
+from `settings.json` when you install the plugin, or every prompt is
+nudged twice. The old `~/.claude/commands/{coach-accept,coach-original,prompt-coach}.md`
+files can be deleted. (A `setup`/`doctor` command to automate this is the
+next planned step; see STATUS.md.)
 
 ## Wiring `nudge` into Hermes
 

@@ -8,6 +8,9 @@ in `DECISIONS.md`.)
 > `.cursorrules`, `.github/copilot-instructions.md`, or any other
 > agent-specific config files. If you need to add or correct guidance, edit
 > `AGENTS.md` (or the nearest `AGENTS.md` in a subdirectory).
+>
+> The Claude Code plugin under `plugin/` (with `.claude-plugin/marketplace.json`)
+> is a shipped product, not agent guidance, so it is not covered by this rule.
 
 ## What This Is
 
@@ -95,7 +98,7 @@ prompt-coach score "their prompt text" --json
 
 Returns: `{"score": 75, "bonuses": [["Output format specified", 15], ...], "penalties": [...]}`
 
-Present it as a readable breakdown, e.g. "That prompt scores 75/100 — it's
+Present it as a readable breakdown, e.g. "That prompt scores 75/100: it's
 missing an output format and a worked example, which would give you more
 targeted results."
 
@@ -129,7 +132,7 @@ prompt-coach stats --since 30d                   # metrics overview
 ### Respond in the user's language
 
 If the user writes in a non-English language, present the output in the same
-language. Keep it concise — a score, a short breakdown, and one actionable
+language. Keep it concise: a score, a short breakdown, and one actionable
 suggestion is better than a wall of numbers.
 
 ## Nudge modes
@@ -140,7 +143,7 @@ which mode to use:
 - **coach**: blocks weak prompts before they send, offers a rewrite. Best for
   learning / deliberate improvement.
 - **auto**: silently improves weak prompts via a self-improve directive. Best
-  for speed — you see the refined prompt and the answer in one response.
+  for speed: you see the refined prompt and the answer in one response.
 - **hint**: lets the prompt through, shows a tip after the response. Non-intrusive,
   purely educational.
 - **always**: blocks and rewrites every prompt unconditionally. Explicit opt-in.
