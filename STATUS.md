@@ -1,7 +1,32 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-24 by Claude (Opus 5.5): `uv tool install --force .`
-now always installs the current source (it was silently reusing stale
-builds). Phase 3 live on `dev`. 433 tests.
+Last updated: 2026-09-24 by Claude (Opus 5.5): second wrap-up. Plugin
+phases 1-3, the scoring/paste fixes and the reinstall fix are merged and
+live on `dev`; see "Live state and open items" below. 433 tests.
+
+## Live state and open items (2026-09-24, second wrap-up)
+
+- **Live on `dev`**: `main` at `77e408c` (PRs #2-#7 merged). Installed CLI
+  rebuilt from `9b0e0ad` (phase 3) with a forced refresh; #7 changed only
+  build settings and tests, so no reinstall was needed after it, and from
+  #7 on a plain `uv tool install --force .` rebuilds correctly. Plugin
+  enabled from the `/home/alistair/projects/prompt-coach` directory
+  marketplace, so hook/skill changes load in place at the next session.
+- **Verified on the installed build**: `discover` reads Claude Code
+  sessions again; a real `claude -p` session (temp copy of the cache) showed
+  the SessionStart summary and the model confirmed it wasn't in its
+  context; the paste tip and scoring fixes respond through the plugin hook.
+- **Legacy setup backups** (from `migrate-legacy`):
+  `~/.claude/settings.json.bak-20260924-172300` (plus a manual
+  `.bak-manual-20260924-172259`) and `~/.claude/commands/*.md.bak-20260924-172300`.
+- **Next**: optional plugin phase 4 (status-line offer in `setup`,
+  `claude plugin validate` in CI).
+- **Known limits** (DECISIONS.md 2026-09-24): pasted documents (form
+  fields, contracts, help text) still read as sections about half the time;
+  any percentage in a bullet counts as a constraint.
+- **Other remote branches** not from this work, left alone:
+  `claude/auto-prompt-improvement-7b51b7`,
+  `claude/hook-prompt-interception-buttons-1a6cf7`, `claude/next-steps-a0d86d`,
+  `al/add-claude-md-stub` (PR #1, closed unmerged).
 
 ## Reinstall no longer reuses stale builds (2026-09-24)
 
@@ -37,26 +62,6 @@ DECISIONS.md (2026-09-24, phase 3) has the reasoning. Shipped on branch
 - Fixed a pre-existing `streaks.py` bug the new tests caught: a fresh cache
   got a shallow copy of the defaults, so fresh caches shared one module-level
   history list and it leaked between caches within one process.
-
-## Live state and open items (2026-09-24 wrap-up)
-
-- **Live on `dev`**: CLI reinstalled from `main` (`275eb45`) via `uv tool
-  install --force .`. Plugin enabled from the `/home/alistair/projects/
-  prompt-coach` directory marketplace; `migrate-legacy` removed the two
-  hand-edited hooks and three command files. Backups:
-  `~/.claude/settings.json.bak-20260924-172300` (plus a manual
-  `.bak-manual-20260924-172259`) and `~/.claude/commands/*.md.bak-20260924-172300`.
-  Verified after install: `discover` reads 281 Claude Code sessions, the
-  plugin hook returns the new paste tip, auto mode's directive covers pastes.
-- **Next**: optional plugin phase 4 (status-line offer in `setup`,
-  `claude plugin validate` in CI). Phase 3 shipped, see above.
-- **Known limits** (see DECISIONS.md 2026-09-24): pasted documents (form
-  fields, contracts, help text) still read as sections about half the time;
-  any percentage in a bullet counts as a constraint.
-- **Other remote branches** not from this work, left alone:
-  `claude/auto-prompt-improvement-7b51b7`,
-  `claude/hook-prompt-interception-buttons-1a6cf7`, `claude/next-steps-a0d86d`,
-  `al/add-claude-md-stub` (PR #1, closed unmerged).
 
 ## Scoring fixes + paste detection (2026-09-24)
 
