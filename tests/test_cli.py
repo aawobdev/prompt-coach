@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import typer
@@ -12,7 +12,14 @@ from prompt_coach.cli import app, parse_since
 
 runner = CliRunner()
 
-T0 = datetime(2026, 7, 1, 12, 0, tzinfo=UTC).timestamp()
+# Relative to "now", not a fixed calendar date: dash/serve default to a 12w
+# window (see test_serve_dashboard_server_responds and
+# test_dash_html_writes_standalone_page), and a fixed date silently ages out
+# of that window and starts failing once 12 weeks pass -- confirmed live
+# 2026-09-24, when a fixed 2026-07-01 fixture crossed the cliff (STATUS.md).
+_NOW = datetime.now(tz=UTC)
+T0 = (_NOW - timedelta(days=1)).timestamp()
+_T0_ISO = (_NOW - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 @pytest.fixture
@@ -52,7 +59,7 @@ def env(tmp_path, monkeypatch):
                 "origin": {"kind": "human"},
                 "isSidechain": False,
                 "uuid": "u-1",
-                "timestamp": "2026-07-01T13:00:00.000Z",
+                "timestamp": _T0_ISO,
                 "sessionId": "cc-1",
                 "cwd": "/p",
             }
