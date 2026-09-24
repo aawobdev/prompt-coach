@@ -69,6 +69,7 @@ What it registers:
 
 | Piece | What it does |
 |---|---|
+| `SessionStart` hook (5s, new sessions only) | One line when a session starts: prompts since your last nudge and this week's most common gap, e.g. "39 prompts since your last nudge. This week's most common gap: no output format or example (13 of 15 nudges)". Shown to you, not added to Claude's context (no tokens). Silent on resume, with no history yet, or when nudge mode is `off`. |
 | `UserPromptSubmit` hook (25s) | Runs `prompt-coach nudge`: scores the prompt, blocks with a rewrite (coach/always) or injects the refine directive (auto). |
 | `Stop` hook (10s) | Runs `prompt-coach nudge` for the hint-mode tip. |
 | `/prompt-coach:accept` | Resends the rewrite `nudge` held back. |

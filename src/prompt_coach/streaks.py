@@ -21,6 +21,15 @@ _DEFAULT_STREAKS = {
 }
 
 
+def _fresh_streaks() -> dict:
+    # A new dict AND a new history list every time: `dict(_DEFAULT_STREAKS)`
+    # was a shallow copy, so every fresh cache shared one module-level
+    # history list and record_prompt appended into it -- history leaked
+    # between caches within one process (found 2026-09-24 by the
+    # SessionStart summary tests; test_streaks_do_not_leak_between_caches).
+    return {**_DEFAULT_STREAKS, "history": []}
+
+
 def _streaks_file(cache_dir: Path) -> Path:
     return cache_dir / _STREAKS_PATH
 
@@ -28,13 +37,13 @@ def _streaks_file(cache_dir: Path) -> Path:
 def _load_streaks(cache_dir: Path) -> dict:
     path = _streaks_file(cache_dir)
     if not path.is_file():
-        return dict(_DEFAULT_STREAKS)
+        return _fresh_streaks()
     try:
         data = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
-        return dict(_DEFAULT_STREAKS)
+        return _fresh_streaks()
     if not isinstance(data, dict):
-        return dict(_DEFAULT_STREAKS)
+        return _fresh_streaks()
     data.setdefault("good_prompt_streak", 0)
     data.setdefault("no_intervention_streak", 0)
     data.setdefault("best_streak", 0)

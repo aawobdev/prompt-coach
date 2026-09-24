@@ -770,3 +770,36 @@ class TestBarePasteTrigger:
         )
         assert _tip_for(prompt) != _TIP_PASTE
         assert _tip_for(PASTE) == _TIP_PASTE
+
+
+class TestSessionStartDispatch:
+    """build_response routes SessionStart to session_summary (phase 3)."""
+
+    def _seed(self, cfg):
+        from prompt_coach.streaks import record_prompt
+
+        record_prompt(cfg.cache_dir, "some prompt", was_nudged=True)
+        record_prompt(cfg.cache_dir, "another prompt", was_nudged=False)
+
+    def test_startup_returns_summary(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="auto")
+        self._seed(cfg)
+        resp = build_response(
+            {"hook_event_name": "SessionStart", "source": "startup", "session_id": "s"}, cfg
+        )
+        assert resp["systemMessage"].startswith("prompt-coach: 1 prompt since your last nudge.")
+
+    def test_per_directory_off_override_silences_it(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="auto", dir_overrides={"/quiet": "off"})
+        self._seed(cfg)
+        payload = {"hook_event_name": "SessionStart", "source": "startup", "cwd": "/quiet/x"}
+        assert build_response(payload, cfg) == {}
+
+    def test_never_records_a_prompt_or_audit_event(self, tmp_path):
+        from prompt_coach.streaks import get_score_history
+
+        cfg = make_cfg(tmp_path, mode="coach")
+        self._seed(cfg)
+        build_response({"hook_event_name": "SessionStart", "source": "startup"}, cfg)
+        assert len(get_score_history(cfg.cache_dir)) == 2
+        assert not (cfg.cache_dir / "cache.db").exists()

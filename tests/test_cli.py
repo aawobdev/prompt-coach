@@ -163,6 +163,13 @@ def test_nudge_hook_short_prompt_is_silent(env):
     assert json.loads(result.output) == {}
 
 
+def test_nudge_hook_session_start_fresh_install_is_silent(env):
+    payload = json.dumps({"hook_event_name": "SessionStart", "source": "startup"})
+    result = runner.invoke(app, ["nudge"], input=payload)
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {}  # JSON, never plain text (which reaches the model)
+
+
 def test_nudge_hook_malformed_stdin_never_crashes(env):
     result = runner.invoke(app, ["nudge"], input="not json")
     assert result.exit_code == 0

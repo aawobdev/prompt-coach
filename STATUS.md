@@ -1,8 +1,29 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-24 by Claude (Opus 5.5): session wrap-up. PRs #2, #3
-and #4 merged and live on `dev`: plugin installed (legacy hooks migrated),
-scoring fixes and paste detection deployed, Claude Code store reading real
-prompts again. 413 tests.
+Last updated: 2026-09-24 by Claude (Opus 5.5): plugin phase 3 -- a
+`SessionStart` hook shows a one-line coaching summary when a session
+starts. 432 tests.
+
+## Plugin phase 3: SessionStart summary (2026-09-24)
+
+DECISIONS.md (2026-09-24, phase 3) has the reasoning. Shipped on branch
+`claude/plugin-phase3-session-start`:
+- `session_summary.py`: prompts since your last nudge, plus the most common
+  nudge trigger in the last 7 days with a one-line fix. Real output:
+  "39 prompts since your last nudge. This week's most common gap: no output
+  format or example (13 of 15 nudges) -- name the shape you want back."
+  Reads streaks.json and the audit log only; counts, never prompt content.
+- `hooks.json`: `SessionStart`, matcher `startup`, 5s timeout, through the
+  same fail-safe `pc nudge` entry point (dispatch in `build_response`).
+- Returned as a JSON `systemMessage` only: shown to the user, not added to
+  the model's context. Verified live with `claude -p --plugin-dir` +
+  stream-json: the hook fired with real data and the model, asked whether
+  its context contained the summary, answered "CLEAN". `--continue`
+  (resume) fired no hook. Cost ~0.15s, same as bare CLI startup.
+- Silent on resume/clear/compact/fork, with no history, and in `off` mode
+  (including per-directory `off` overrides).
+- Fixed a pre-existing `streaks.py` bug the new tests caught: a fresh cache
+  got a shallow copy of the defaults, so fresh caches shared one module-level
+  history list and it leaked between caches within one process.
 
 ## Live state and open items (2026-09-24 wrap-up)
 
@@ -14,9 +35,8 @@ prompts again. 413 tests.
   `.bak-manual-20260924-172259`) and `~/.claude/commands/*.md.bak-20260924-172300`.
   Verified after install: `discover` reads 281 Claude Code sessions, the
   plugin hook returns the new paste tip, auto mode's directive covers pastes.
-- **Next**: plugin phase 3 (`SessionStart` hook showing streak / top
-  weakness as a `systemMessage`), then optional phase 4 (status-line offer
-  in `setup`, `claude plugin validate` in CI).
+- **Next**: optional plugin phase 4 (status-line offer in `setup`,
+  `claude plugin validate` in CI). Phase 3 shipped, see above.
 - **Known limits** (see DECISIONS.md 2026-09-24): pasted documents (form
   fields, contracts, help text) still read as sections about half the time;
   any percentage in a bullet counts as a constraint.

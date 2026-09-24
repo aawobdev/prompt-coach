@@ -516,14 +516,19 @@ def build_response(payload: dict, cfg: Config) -> dict:
     override -- see `_resolve_mode`). Handles Claude Code's UserPromptSubmit
     (block-and-rewrite in coach/always, LLM-free self-improve directive
     in auto) and Stop
-    (tip-only, coach mode only), plus Hermes's `pre_llm_call` (tip-only
-    always -- see `_hermes_tip_response`)."""
+    (tip-only, coach mode only), SessionStart (one-line summary, see
+    session_summary.py), plus Hermes's `pre_llm_call` (tip-only always --
+    see `_hermes_tip_response`)."""
     if payload.get("hook_event_name") == "pre_llm_call":
         return _hermes_tip_response(payload, cfg)
 
     mode = _resolve_mode(cfg, payload.get("cwd"))
     if mode == "off":
         return {}
+    if payload.get("hook_event_name") == "SessionStart":
+        from prompt_coach.session_summary import hook_response_session_start
+
+        return hook_response_session_start(payload, cfg.cache_dir, mode)
     session_id = payload.get("session_id", "")
     if not session_id:
         return {}
