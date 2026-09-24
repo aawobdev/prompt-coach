@@ -1,13 +1,35 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-25 by Claude (Opus 5.5): scoring signals fixed and
-pasted material no longer earns structure bonuses; the Claude Code store
-reads real prompts again (it had been reading none). 413 tests.
+Last updated: 2026-09-24 by Claude (Opus 5.5): session wrap-up. PRs #2, #3
+and #4 merged and live on `dev`: plugin installed (legacy hooks migrated),
+scoring fixes and paste detection deployed, Claude Code store reading real
+prompts again. 413 tests.
 
-## Scoring fixes + paste detection (2026-09-25)
+## Live state and open items (2026-09-24 wrap-up)
+
+- **Live on `dev`**: CLI reinstalled from `main` (`275eb45`) via `uv tool
+  install --force .`. Plugin enabled from the `/home/alistair/projects/
+  prompt-coach` directory marketplace; `migrate-legacy` removed the two
+  hand-edited hooks and three command files. Backups:
+  `~/.claude/settings.json.bak-20260924-172300` (plus a manual
+  `.bak-manual-20260924-172259`) and `~/.claude/commands/*.md.bak-20260924-172300`.
+  Verified after install: `discover` reads 281 Claude Code sessions, the
+  plugin hook returns the new paste tip, auto mode's directive covers pastes.
+- **Next**: plugin phase 3 (`SessionStart` hook showing streak / top
+  weakness as a `systemMessage`), then optional phase 4 (status-line offer
+  in `setup`, `claude plugin validate` in CI).
+- **Known limits** (see DECISIONS.md 2026-09-24): pasted documents (form
+  fields, contracts, help text) still read as sections about half the time;
+  any percentage in a bullet counts as a constraint.
+- **Other remote branches** not from this work, left alone:
+  `claude/auto-prompt-improvement-7b51b7`,
+  `claude/hook-prompt-interception-buttons-1a6cf7`, `claude/next-steps-a0d86d`,
+  `al/add-claude-md-stub` (PR #1, closed unmerged).
+
+## Scoring fixes + paste detection (2026-09-24)
 
 Started as a review of uncommitted WIP found on `main` (a `has_sections`
 bonus and a follow-up-message exemption), which turned up 8 bugs, then a
-real-corpus test pass that found 2 more. DECISIONS.md (2026-09-25) has the
+real-corpus test pass that found 2 more. DECISIONS.md (2026-09-24) has the
 reasoning. Shipped on branch `fix/has-sections-follow-up-scoring` (PR #4):
 - **Claude Code store was reading zero prompts.** `promptSource` is no
   longer `typed` in any real transcript (0 of 277,872 lines); accepting

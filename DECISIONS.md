@@ -1097,7 +1097,7 @@ tests + `PROMPT_COACH_CLAUDE_HOME`/`find_repo_root` isolation in the shared
 `env` fixture), README. 370 tests (up from 318).
 **Decided by**: Alistair (go-ahead: "Start phase 2"), 2026-09-24.
 
-## 2026-09-25 - Structure signals read authored text only; bare pastes get their own trigger
+## 2026-09-24 - Structure signals read authored text only; bare pastes get their own trigger
 
 **Trigger**: review of WIP found on `main`, then a real-corpus test pass.
 The original complaint (2026-09-23): a bare pasted code block with no ask
@@ -1134,5 +1134,5 @@ bare-paste flags 18 of 18 genuine, A4 unchanged.
 time; any percentage in a bullet counts as a constraint.
 **Affects**: analysis/metrics.py, score.py, rubric.py, nudge.py,
 stores/base.py, stores/claude_code.py, AGENTS.md, tests. 413 tests.
-**Decided by**: Alistair ("do 1 and (c)"), 2026-09-25.
+**Decided by**: Alistair ("do 1 and (c)"), 2026-09-24.
 
