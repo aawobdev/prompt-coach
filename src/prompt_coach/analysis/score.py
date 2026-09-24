@@ -8,6 +8,23 @@ Score breakdown:
   - + bonuses for good practices (format, examples, constraints, grounding)
   - - penalties for bad practices (vague scope, missing structure, conflated asks)
   - Clamped to [0, 100]
+
+A follow-up-message exemption (skip the format/example/constraints
+penalties when the text looked like a short conversational continuation)
+was tried and removed here, not merged (code review 2026-09-24): matching
+on the first word alone ("yes"/"now"/"check"/"try"/"and"/...) fired on
+long, fully-formed prompts too -- "Now build X with these constraints:
+must be stdlib only..." starts with "Now" and would have had its own
+constraints/example penalties silently waived. A length cap doesn't save
+it either: the three penalties this would gate only apply at >=100/150/200
+chars, exactly the range where "is this really just a follow-up" stops
+being answerable from the isolated string. score_prompt takes no session
+context (it's called with a bare string from streaks.py and in a
+per-prompt corpus loop from rubric.py), so it has no sound way to tell a
+genuine continuation from a fresh, unstructured ask at that length --
+nudge.py's gather_context/_tail_human_prompts already reconstructs real
+session continuity from the transcript for exactly this reason, and that
+is the layer this belongs at if it's rebuilt.
 """
 
 from __future__ import annotations
@@ -22,7 +39,6 @@ from prompt_coach.analysis.metrics import (
 )
 
 _BROAD_SCOPE = re.compile(r"\b(everything|all of|whole|revamp)\b", re.IGNORECASE)
-_FOLLOW_UP = re.compile(r"^(yes|no|then|and|also|ok|okay|now|try|check|wrap)\b", re.IGNORECASE)
 _MULTIPLE_ASKS = re.compile(
     r"(?:and\s+also|as\s+well\s+as|in\s+addition|separately|"
     r"firstly|secondly|lastly|next\s*[,;.])",
@@ -73,14 +89,13 @@ def score_prompt(text: str) -> int:
         score += SCORE_WEIGHTS["sweet_spot_length"]
 
     # -- Penalties --
-    is_follow_up = bool(_FOLLOW_UP.match(text))
     if length < 20:
         score += SCORE_WEIGHTS["too_short"]
-    if not has_structured_output(text) and length >= 200 and not is_follow_up:
+    if not has_structured_output(text) and length >= 200:
         score += SCORE_WEIGHTS["no_output_format"]
-    if not has_example(text) and length >= 100 and not is_follow_up:
+    if not has_example(text) and length >= 100:
         score += SCORE_WEIGHTS["no_example"]
-    if not has_constraints(text) and length >= 150 and not is_follow_up:
+    if not has_constraints(text) and length >= 150:
         score += SCORE_WEIGHTS["no_constraints"]
     if _BROAD_SCOPE.search(text) and not has_constraints(text):
         score += SCORE_WEIGHTS["vague_scope"]
@@ -111,14 +126,13 @@ def score_breakdown(text: str) -> dict:
     if 50 <= length <= 300:
         bonuses.append(("Concise length (50-300 chars)", SCORE_WEIGHTS["sweet_spot_length"]))
 
-    is_follow_up = bool(_FOLLOW_UP.match(text))
     if length < 20:
         penalties.append(("Too short (< 20 chars)", SCORE_WEIGHTS["too_short"]))
-    if not has_structured_output(text) and length >= 200 and not is_follow_up:
+    if not has_structured_output(text) and length >= 200:
         penalties.append(("Missing output format", SCORE_WEIGHTS["no_output_format"]))
-    if not has_example(text) and length >= 100 and not is_follow_up:
+    if not has_example(text) and length >= 100:
         penalties.append(("No example provided", SCORE_WEIGHTS["no_example"]))
-    if not has_constraints(text) and length >= 150 and not is_follow_up:
+    if not has_constraints(text) and length >= 150:
         penalties.append(("No constraints/boundaries", SCORE_WEIGHTS["no_constraints"]))
     if _BROAD_SCOPE.search(text) and not has_constraints(text):
         penalties.append(("Vague/broad scope", SCORE_WEIGHTS["vague_scope"]))

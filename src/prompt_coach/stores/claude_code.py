@@ -7,6 +7,17 @@ results, hook output, subagent traffic, command echoes, system reminders,
 malformed lines) is skipped. iter_file yields byte offsets so the cache can
 resume grown (append-only) files incrementally.
 
+promptSource accepts "sdk" as well as "typed" (verified live 2026-09-24,
+this machine, 277,872 real JSONL lines): "typed" does not appear in a
+single current transcript -- Claude Code's own wire format moved on, and
+the "typed"-only filter was accepting zero Claude Code prompts. Widening
+to "sdk" recovers 4,359 real prompts, but "sdk" is not itself proof of
+human authorship: 143 of those lines were harness-wrapped content
+(<bash-input>/<bash-stdout>/<system-reminder>/<artifact-view-context>)
+that origin.kind=human doesn't catch either. is_harness_wrapped
+(stores/base.py) below closes that gap; without it this widening would
+have poured that contamination straight into the human corpus.
+
 Model capture (2026-07-29): the model that answered a turn lives on the
 *following* `type: "assistant"` line's `message.model`, linked back via
 `parentUuid` -- confirmed live that sessions genuinely mix models
@@ -28,7 +39,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from prompt_coach.models import Prompt, SourceKind, StoreInfo
-from prompt_coach.stores.base import classify_origin, content_hash
+from prompt_coach.stores.base import classify_origin, content_hash, is_harness_wrapped
 
 _SYSTEM_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 _COMMAND_MARKERS = ("<command-name>", "<local-command-stdout>", "<local-command-caveat>")
@@ -50,7 +61,14 @@ def _normalise_content(raw: object) -> str | None:
     if any(marker in text for marker in _COMMAND_MARKERS):
         return None
     text = _SYSTEM_REMINDER.sub("", text).strip()
-    return text or None
+    if not text or is_harness_wrapped(text):
+        # A whole-system-reminder line strips to empty above and is caught
+        # by `not text`; other wrapper shapes (<bash-input>, <artifact-
+        # view-context>, ...) aren't system-reminder-tagged so they survive
+        # the strip -- is_harness_wrapped catches those (confirmed live
+        # 2026-09-24, see the module docstring).
+        return None
+    return text
 
 
 def parse_line(line: str) -> Prompt | None:

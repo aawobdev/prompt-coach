@@ -31,7 +31,16 @@ conventions (uv, ruff, black, pytest, src-layout, STATUS/DECISIONS docs).
   blueprint invented both). Open read-only via `file:...?mode=ro`.
 - **Claude Code**: `~/.claude/projects/<slug>/*.jsonl`. Keep lines where
   `type=user`, `origin.kind=human`, `promptSource in (typed, sdk)`, not `isSidechain`,
-  and content is a real prompt (drop command echoes and system reminders).
+  and content is a real prompt (drop command echoes, system reminders, and
+  other harness wrapper tags -- see `is_harness_wrapped` in `stores/base.py`).
+  `sdk` addition verified live 2026-09-24 against 277,872 real lines on this
+  machine: `typed` appears in none of them (Claude Code's own wire format
+  moved on; the old `typed`-only filter was accepting zero Claude Code
+  prompts), `sdk` covers ordinary typed prompts too. `sdk` alone is not
+  proof of human authorship though -- 143 of the newly-matched lines were
+  harness-wrapped content (`<bash-input>`, `<artifact-view-context>`, etc.)
+  that `origin.kind=human` doesn't catch either; `is_harness_wrapped`
+  rejects those regardless of `promptSource`.
 - **Copilot Chat**: `/mnt/c/.../workspaceStorage/<ws>/chatSessions/*.jsonl`
   (JSON-patch event log; verified live 2026-07-20).
 - **Codex CLI**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (`/mnt/c` on

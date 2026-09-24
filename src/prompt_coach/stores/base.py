@@ -25,6 +25,28 @@ _MACHINE_PATTERNS = re.compile(
 )
 
 
+# Harness-injected payloads look exactly like typed prompts, but nobody
+# typed them. Single source of truth so nudge.py's live-hook check and
+# every store's corpus-read check reject the same wrapper shapes --
+# previously nudge.py had its own private copy of this pattern and no
+# store checked it at all. bash-input/bash-stdout/bash-stderr and
+# artifact-view-context confirmed live 2026-09-24 (code review of the
+# promptSource=sdk change below): both slip past claude_code.py's
+# system-reminder stripping and land in the human corpus with
+# origin.kind=human. task-notification seen live 2026-07-31 in nudge.py
+# (a background-task completion event got offered a "tighten this up"
+# rewrite). classify_origin (above) catches the orchestration task specs
+# (TASK:/HANDOFF: one-shots) on top of this.
+HARNESS_WRAPPED = re.compile(
+    r"^\s*<(task-notification|command-message|command-name|system-reminder|"
+    r"local-command-stdout|artifact-view-context|bash-(input|stdout|stderr))\b"
+)
+
+
+def is_harness_wrapped(content: str) -> bool:
+    return bool(HARNESS_WRAPPED.match(content))
+
+
 def classify_origin(content: str) -> PromptOrigin:
     if _MACHINE_PATTERNS.match(content):
         return PromptOrigin.MACHINE

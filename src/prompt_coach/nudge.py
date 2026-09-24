@@ -75,7 +75,7 @@ from prompt_coach.analysis.metrics import has_constraints, has_example, has_stru
 from prompt_coach.cache import CacheDB
 from prompt_coach.config import Config
 from prompt_coach.models import PromptOrigin
-from prompt_coach.stores.base import classify_origin
+from prompt_coach.stores.base import classify_origin, is_harness_wrapped
 from prompt_coach.stores.claude_code import parse_line
 from prompt_coach.streaks import record_prompt
 
@@ -114,20 +114,14 @@ _TIP_SCOPE = (
 # rather than added speculatively.
 _BROAD_SCOPE = re.compile(r"\b(everything|all of|whole|revamp)\b", re.IGNORECASE)
 
-# Harness-injected payloads arrive through UserPromptSubmit shaped exactly
-# like typed prompts, but nobody typed them. Seen live 2026-07-31: nudge
-# blocked a <task-notification> (a background-task completion event) and
-# offered to "tighten" it. Match the wrapper tags Claude Code injects as
-# user turns; classify_origin then catches the orchestration task specs
-# (TASK:/HANDOFF: one-shots) on top.
-_HARNESS_WRAPPED = re.compile(
-    r"^\s*<(task-notification|command-message|command-name|system-reminder|"
-    r"local-command-stdout|bash-(input|stdout|stderr))\b"
-)
-
 
 def _is_machine_prompt(prompt: str) -> bool:
-    return bool(_HARNESS_WRAPPED.match(prompt)) or classify_origin(prompt) is PromptOrigin.MACHINE
+    # is_harness_wrapped (stores/base.py) is the single source of truth for
+    # this pattern -- code review 2026-09-24 found the Claude Code store
+    # needed the exact same check (it didn't have one at all), so this
+    # module's former private copy moved there rather than staying
+    # duplicated in two places.
+    return bool(is_harness_wrapped(prompt)) or classify_origin(prompt) is PromptOrigin.MACHINE
 
 
 def _is_long_unstructured(prompt: str) -> bool:
