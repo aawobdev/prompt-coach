@@ -30,7 +30,7 @@ conventions (uv, ruff, black, pytest, src-layout, STATUS/DECISIONS docs).
   NO `profiles` table and NO `~/.hermes/data/sessions.db` (an earlier
   blueprint invented both). Open read-only via `file:...?mode=ro`.
 - **Claude Code**: `~/.claude/projects/<slug>/*.jsonl`. Keep lines where
-  `type=user`, `origin.kind=human`, `promptSource=typed`, not `isSidechain`,
+  `type=user`, `origin.kind=human`, `promptSource in (typed, sdk)`, not `isSidechain`,
   and content is a real prompt (drop command echoes and system reminders).
 - **Copilot Chat**: `/mnt/c/.../workspaceStorage/<ws>/chatSessions/*.jsonl`
   (JSON-patch event log; verified live 2026-07-20).

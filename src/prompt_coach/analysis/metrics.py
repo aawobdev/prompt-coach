@@ -15,7 +15,8 @@ from prompt_coach.models import Prompt, PromptOrigin, SegmentMetrics, StyleMetri
 
 # Signals a prompt includes a worked example.
 _EXAMPLE = re.compile(
-    r"\b(e\.g\.|for example|for instance|example:|like this|such as)\b|==|```", re.IGNORECASE
+    r"\b(e\.g\.(?=\s)|for example|for instance|like this|such as|example:)\b|==|```",
+    re.IGNORECASE,
 )
 # Signals explicit constraints/limits.
 _CONSTRAINT = re.compile(
@@ -23,10 +24,23 @@ _CONSTRAINT = re.compile(
     r"|no more than|at least|stdlib only|do not|don't)\b",
     re.IGNORECASE,
 )
+# Implicit constraints from bullet lists and numbered criteria.
+_IMPLICIT_CONSTRAINT = re.compile(
+    r"(?:^|\n)\s*[-*•]\s+.+$|(?:^|\n)\s*\d+[.)]\s+.+$", re.MULTILINE
+)
+# Section headers indicating structure.
+_SECTION_HEADER = re.compile(
+    r"^(?:Problem|Expected|Steps|Goal|Context|Background|Task|Spec|Requirements|Acceptance Criteria)"
+    r"[:\s]",
+    re.IGNORECASE | re.MULTILINE,
+)
 # Signals a requested output shape.
 _STRUCTURED = re.compile(
-    r"\b(json|yaml|csv|markdown table|table with|as a table|bullet(?:ed)? list"
-    r"|numbered list|schema|output format|format:|return only|respond with only)\b",
+    r"\b(json|yaml|csv|markdown table|table with|as a table|table\b|bullet(?:ed)? list"
+    r"|numbered list|list\s+(?:of|showing|with|containing)|schema|output format|format:"
+    r"|return\s+(?:only|a|as)\s+(?:json|yaml|csv|table|checklist|list|summary)"
+    r"|respond with only"
+    r"|columns?|tabular|report\s+(?:back\s+)?(?:pass|fail|pass/fail|count|result)s?\b)\b",
     re.IGNORECASE,
 )
 
@@ -40,11 +54,17 @@ def has_example(text: str) -> bool:
 
 
 def has_constraints(text: str) -> bool:
-    return bool(_CONSTRAINT.search(text))
+    return bool(_CONSTRAINT.search(text)) or bool(_IMPLICIT_CONSTRAINT.search(text))
 
 
 def has_structured_output(text: str) -> bool:
     return bool(_STRUCTURED.search(text))
+
+
+def has_sections(text: str) -> bool:
+    """2+ section headers = structured prompt."""
+    matches = _SECTION_HEADER.findall(text)
+    return len(matches) >= 2
 
 
 def _segment(prompts: Sequence[Prompt]) -> SegmentMetrics | None:

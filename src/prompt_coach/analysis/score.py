@@ -17,10 +17,12 @@ import re
 from prompt_coach.analysis.metrics import (
     has_constraints,
     has_example,
+    has_sections,
     has_structured_output,
 )
 
 _BROAD_SCOPE = re.compile(r"\b(everything|all of|whole|revamp)\b", re.IGNORECASE)
+_FOLLOW_UP = re.compile(r"^(yes|no|then|and|also|ok|okay|now|try|check|wrap)\b", re.IGNORECASE)
 _MULTIPLE_ASKS = re.compile(
     r"(?:and\s+also|as\s+well\s+as|in\s+addition|separately|"
     r"firstly|secondly|lastly|next\s*[,;.])",
@@ -38,6 +40,7 @@ SCORE_WEIGHTS = {
     "has_example": 10,
     "has_constraints": 10,
     "has_project_context": 10,
+    "has_sections": 5,
     "sweet_spot_length": 5,
     # Penalties (negative)
     "too_short": -10,
@@ -64,17 +67,20 @@ def score_prompt(text: str) -> int:
         score += SCORE_WEIGHTS["has_constraints"]
     if _PROJECT_REF.search(text):
         score += SCORE_WEIGHTS["has_project_context"]
+    if has_sections(text):
+        score += SCORE_WEIGHTS["has_sections"]
     if 50 <= length <= 300:
         score += SCORE_WEIGHTS["sweet_spot_length"]
 
     # -- Penalties --
+    is_follow_up = bool(_FOLLOW_UP.match(text))
     if length < 20:
         score += SCORE_WEIGHTS["too_short"]
-    if not has_structured_output(text) and length >= 200:
+    if not has_structured_output(text) and length >= 200 and not is_follow_up:
         score += SCORE_WEIGHTS["no_output_format"]
-    if not has_example(text) and length >= 100:
+    if not has_example(text) and length >= 100 and not is_follow_up:
         score += SCORE_WEIGHTS["no_example"]
-    if not has_constraints(text) and length >= 150:
+    if not has_constraints(text) and length >= 150 and not is_follow_up:
         score += SCORE_WEIGHTS["no_constraints"]
     if _BROAD_SCOPE.search(text) and not has_constraints(text):
         score += SCORE_WEIGHTS["vague_scope"]
@@ -100,16 +106,19 @@ def score_breakdown(text: str) -> dict:
         bonuses.append(("Constraints/boundaries set", SCORE_WEIGHTS["has_constraints"]))
     if _PROJECT_REF.search(text):
         bonuses.append(("Project context referenced", SCORE_WEIGHTS["has_project_context"]))
+    if has_sections(text):
+        bonuses.append(("Section headers structure prompt", SCORE_WEIGHTS["has_sections"]))
     if 50 <= length <= 300:
         bonuses.append(("Concise length (50-300 chars)", SCORE_WEIGHTS["sweet_spot_length"]))
 
+    is_follow_up = bool(_FOLLOW_UP.match(text))
     if length < 20:
         penalties.append(("Too short (< 20 chars)", SCORE_WEIGHTS["too_short"]))
-    if not has_structured_output(text) and length >= 200:
+    if not has_structured_output(text) and length >= 200 and not is_follow_up:
         penalties.append(("Missing output format", SCORE_WEIGHTS["no_output_format"]))
-    if not has_example(text) and length >= 100:
+    if not has_example(text) and length >= 100 and not is_follow_up:
         penalties.append(("No example provided", SCORE_WEIGHTS["no_example"]))
-    if not has_constraints(text) and length >= 150:
+    if not has_constraints(text) and length >= 150 and not is_follow_up:
         penalties.append(("No constraints/boundaries", SCORE_WEIGHTS["no_constraints"]))
     if _BROAD_SCOPE.search(text) and not has_constraints(text):
         penalties.append(("Vague/broad scope", SCORE_WEIGHTS["vague_scope"]))

@@ -66,7 +66,7 @@ def parse_line(line: str) -> Prompt | None:
         return None
     if (obj.get("origin") or {}).get("kind") != "human":
         return None
-    if obj.get("promptSource") != "typed":
+    if obj.get("promptSource") not in ("typed", "sdk"):
         return None
     if obj.get("isSidechain"):
         return None
