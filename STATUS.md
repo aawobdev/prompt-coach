@@ -1,8 +1,33 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-24 by Claude (Sonnet 5): Claude Code plugin (phase 2
-of 4): `doctor` and `migrate-legacy` install the plugin and clean up the
-legacy hooks/commands, so `install.sh` -> `setup` gets a fresh machine all
-the way to a working plugin. 370 tests.
+Last updated: 2026-09-25 by Claude (Opus 5.5): scoring signals fixed and
+pasted material no longer earns structure bonuses; the Claude Code store
+reads real prompts again (it had been reading none). 413 tests.
+
+## Scoring fixes + paste detection (2026-09-25)
+
+Started as a review of uncommitted WIP found on `main` (a `has_sections`
+bonus and a follow-up-message exemption), which turned up 8 bugs, then a
+real-corpus test pass that found 2 more. DECISIONS.md (2026-09-25) has the
+reasoning. Shipped on branch `fix/has-sections-follow-up-scoring` (PR #4):
+- **Claude Code store was reading zero prompts.** `promptSource` is no
+  longer `typed` in any real transcript (0 of 277,872 lines); accepting
+  `sdk` recovers 4,361. `is_harness_wrapped` (stores/base.py, now shared
+  with nudge.py) rejects the 143 wrapper lines that came with it.
+- Signal regexes: `_STRUCTURED` no longer matches bare table/columns or
+  "list of" without an output verb; implicit constraints need a real bound;
+  `e.g.`/`example:` actually match now (dead on `main`); `has_sections`
+  uses general labels, not a 10-word list. The follow-up exemption was
+  removed, not patched: it can't be judged from an isolated string.
+- **Paste detection**: every structure signal reads `authored_text()`
+  (the prompt minus fences, machine-output lines and key-value dumps). A
+  fence is an example only when cued. `is_bare_paste()` adds a -15 score
+  penalty and its own nudge tip, which never rewrites-and-blocks.
+- Verified on the real corpus (3,722 prompts, all three versions side by
+  side): sections bonus 1.64% -> 0.70%, 18 bare pastes flagged and all 18
+  genuine, A4 unchanged. Every fix mutation-checked.
+- Known limits: pasted *documents* (form fields, contracts, help text)
+  still read as sections about half the time; percentages in any bullet
+  count as constraints (2 of 3,722 prompts).
 
 ## Claude Code plugin, phase 2: doctor + migrate-legacy (2026-09-24)
 

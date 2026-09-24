@@ -35,6 +35,16 @@ def test_typed_human_prompt_accepted():
     assert p.timestamp.tzinfo is not None
 
 
+def test_sdk_promptsource_accepted():
+    """Verified live 2026-09-24 against 277,872 real lines on this machine:
+    "typed" appears in none of them (Claude Code's own wire format moved
+    on), "sdk" covers ordinary typed prompts too -- 4,359 real prompts the
+    "typed"-only filter was silently dropping to zero. See AGENTS.md."""
+    p = parse_line(line(promptSource="sdk"))
+    assert p is not None
+    assert p.content == "fix the flaky test in auth"
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
@@ -58,6 +68,32 @@ def test_command_echo_rejected():
 def test_bare_system_reminder_rejected():
     content = "<system-reminder>some background</system-reminder>"
     assert parse_line(line(message={"role": "user", "content": content})) is None
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        # Real samples, shape-preserved, found live 2026-09-24 while
+        # verifying the promptSource=sdk widening above: 143 lines like
+        # these carried origin.kind=human + promptSource=sdk and would
+        # have flowed into the human corpus without this rejection.
+        "<bash-input>ls</bash-input><bash-stdout></bash-stdout>"
+        "<bash-stderr>Bash mode is not available for SSH sessions on Windows yet.</bash-stderr>",
+        '<artifact-view-context artifact="3f4e62c3-9c92">\n{"context":{"mode":"edit"}}',
+        "<task-notification>\n<task-id>abc</task-id>\n<status>completed</status>\n</task-notification>",
+    ],
+)
+def test_harness_wrapped_content_rejected_regardless_of_promptsource(content):
+    for prompt_source in ("typed", "sdk"):
+        assert (
+            parse_line(
+                line(
+                    promptSource=prompt_source,
+                    message={"role": "user", "content": content},
+                )
+            )
+            is None
+        )
 
 
 def test_inline_system_reminder_stripped():

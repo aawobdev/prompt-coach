@@ -71,11 +71,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from prompt_coach.analysis.docs import find_project_docs, is_redirect_stub
-from prompt_coach.analysis.metrics import has_constraints, has_example, has_structured_output
+from prompt_coach.analysis.metrics import (
+    has_constraints,
+    has_example,
+    has_structured_output,
+    is_bare_paste,
+)
 from prompt_coach.cache import CacheDB
 from prompt_coach.config import Config
 from prompt_coach.models import PromptOrigin
-from prompt_coach.stores.base import classify_origin
+from prompt_coach.stores.base import classify_origin, is_harness_wrapped
 from prompt_coach.stores.claude_code import parse_line
 from prompt_coach.streaks import record_prompt
 
@@ -100,6 +105,11 @@ _TIP_SHAPE = (
     "prompt-coach tip: no output format or worked example in that prompt -- "
     "consider stating the shape you want back, or giving a short example."
 )
+_TIP_PASTE = (
+    "prompt-coach tip: that's mostly pasted material with little instruction -- "
+    "say what you want done with it (fix, explain, review?) and what you've "
+    "already tried."
+)
 _TIP_SCOPE = (
     "prompt-coach tip: that's a big, open-ended ask with nothing scoping it -- "
     "consider naming what's in scope (or explicitly out of scope) before "
@@ -114,20 +124,14 @@ _TIP_SCOPE = (
 # rather than added speculatively.
 _BROAD_SCOPE = re.compile(r"\b(everything|all of|whole|revamp)\b", re.IGNORECASE)
 
-# Harness-injected payloads arrive through UserPromptSubmit shaped exactly
-# like typed prompts, but nobody typed them. Seen live 2026-07-31: nudge
-# blocked a <task-notification> (a background-task completion event) and
-# offered to "tighten" it. Match the wrapper tags Claude Code injects as
-# user turns; classify_origin then catches the orchestration task specs
-# (TASK:/HANDOFF: one-shots) on top.
-_HARNESS_WRAPPED = re.compile(
-    r"^\s*<(task-notification|command-message|command-name|system-reminder|"
-    r"local-command-stdout|bash-(input|stdout|stderr))\b"
-)
-
 
 def _is_machine_prompt(prompt: str) -> bool:
-    return bool(_HARNESS_WRAPPED.match(prompt)) or classify_origin(prompt) is PromptOrigin.MACHINE
+    # is_harness_wrapped (stores/base.py) is the single source of truth for
+    # this pattern -- code review 2026-09-24 found the Claude Code store
+    # needed the exact same check (it didn't have one at all), so this
+    # module's former private copy moved there rather than staying
+    # duplicated in two places.
+    return bool(is_harness_wrapped(prompt)) or classify_origin(prompt) is PromptOrigin.MACHINE
 
 
 def _is_long_unstructured(prompt: str) -> bool:
@@ -147,6 +151,11 @@ def _is_short_and_vague(prompt: str) -> bool:
 def _tip_for(prompt: str) -> str | None:
     if _is_machine_prompt(prompt):
         return None
+    # Before the shape check: a bare paste used to read as well-structured
+    # (its own fence/formatting earned the example and structure signals),
+    # so this is the one trigger that catches it (2026-09-24).
+    if is_bare_paste(prompt):
+        return _TIP_PASTE
     if _is_long_unstructured(prompt):
         return _TIP_SHAPE
     if _is_short_and_vague(prompt):
@@ -325,7 +334,8 @@ _AUTO_RESPONSE = {
         "additionalContext": (
             "prompt-coach auto-improve: the user has automatic prompt "
             "improvement enabled, and this prompt tripped a weak-prompt "
-            "trigger (vague scope or no output shape). Before answering, "
+            "trigger (vague scope, no output shape, or mostly pasted material "
+            "with little instruction). Before answering, "
             "silently rewrite it into the clearer, better-scoped request "
             "the user most plausibly meant, grounded in this project and "
             "conversation: pin down scope and constraints if the ask is "
@@ -567,6 +577,14 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if mode == "always":
         if _is_machine_prompt(prompt):
             return {}  # harness traffic, not a prompt anyone typed
+        if is_bare_paste(prompt):
+            # A rewrite is kept "about as long as a well-written ask" (see
+            # _REWRITE_SYSTEM), so rewriting a mostly-pasted prompt risks
+            # dropping the pasted material -- /prompt-coach:accept would then
+            # send the ask without it. Tip instead, never block.
+            _record_audit(cfg, payload, prompt, trigger=_TIP_PASTE)
+            record_prompt(cfg.cache_dir, prompt, was_nudged=True)
+            return {"systemMessage": _TIP_PASTE}
         llm = _make_llm(cfg)
         context = gather_context(payload) if llm is not None else None
         result = _rewrite_or_fallback(
@@ -588,6 +606,11 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if tip is None or session_id in _load_nudged_sessions(cfg.cache_dir):
         return {}
     _record_nudge(cfg.cache_dir, session_id)
+    if tip == _TIP_PASTE:
+        # Same reason as always-mode above: never rewrite-and-block a paste.
+        _record_audit(cfg, payload, prompt, trigger=tip)
+        record_prompt(cfg.cache_dir, prompt, was_nudged=True)
+        return {"systemMessage": tip}
     llm = _make_llm(cfg)
     context = gather_context(payload) if llm is not None else None
     result = _rewrite_or_fallback(

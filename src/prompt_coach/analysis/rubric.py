@@ -20,6 +20,9 @@ import re
 from collections.abc import Sequence
 
 from prompt_coach.analysis.metrics import (
+    LIST_ITEM,
+    SECTION_LABEL,
+    authored_text,
     has_constraints,
     has_example,
     has_structured_output,
@@ -56,7 +59,6 @@ RULE_TITLES = {
 LLM_RULES = ("A1", "A2", "A3", "A8")
 _ORCHESTRATION_RULES = ("A7", "A9", "A10", "A13")
 
-_HEADING_OR_LIST = re.compile(r"^\s*(#{1,4}\s|\d+[.)]\s|[-*]\s|\w[\w /]{0,30}:\s)", re.MULTILINE)
 _FENCED_OR_TAGGED = re.compile(r"```|<[a-z_]+>")
 _VERIFY = re.compile(r"\b(verify|check that|confirm|acceptance|test with)\b[:\s]", re.IGNORECASE)
 _SELF_CHECK = re.compile(
@@ -101,8 +103,19 @@ def score_prompt_deterministic(p: Prompt) -> list[RuleScore]:
         )
 
     # A4 structure: only meaningful once a prompt is long enough to need it.
+    # LIST_ITEM/SECTION_LABEL (metrics.py) replace this rule's former
+    # private _HEADING_OR_LIST regex (code review 2026-09-24: the same
+    # "heading or list item" pattern existed independently here and in
+    # metrics.py, with different marker sets that could silently drift).
+    # Read from authored_text so pasted logs/config don't count as the
+    # prompt's own structure (2026-09-24); a fence or tag is still a
+    # structure signal on its own (tagged/fenced specs are authored structure).
     if len(text) >= _A4_MIN_CHARS:
-        structured = bool(_HEADING_OR_LIST.search(text)) or bool(_FENCED_OR_TAGGED.search(text))
+        structured = (
+            bool(LIST_ITEM.search(authored_text(text)))
+            or bool(SECTION_LABEL.search(authored_text(text)))
+            or bool(_FENCED_OR_TAGGED.search(text))
+        )
         add("A4", 1.0 if structured else 0.0)
     else:
         add("A4", None, "short prompt, structure not required")

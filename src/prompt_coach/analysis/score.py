@@ -8,6 +8,23 @@ Score breakdown:
   - + bonuses for good practices (format, examples, constraints, grounding)
   - - penalties for bad practices (vague scope, missing structure, conflated asks)
   - Clamped to [0, 100]
+
+A follow-up-message exemption (skip the format/example/constraints
+penalties when the text looked like a short conversational continuation)
+was tried and removed here, not merged (code review 2026-09-24): matching
+on the first word alone ("yes"/"now"/"check"/"try"/"and"/...) fired on
+long, fully-formed prompts too -- "Now build X with these constraints:
+must be stdlib only..." starts with "Now" and would have had its own
+constraints/example penalties silently waived. A length cap doesn't save
+it either: the three penalties this would gate only apply at >=100/150/200
+chars, exactly the range where "is this really just a follow-up" stops
+being answerable from the isolated string. score_prompt takes no session
+context (it's called with a bare string from streaks.py and in a
+per-prompt corpus loop from rubric.py), so it has no sound way to tell a
+genuine continuation from a fresh, unstructured ask at that length --
+nudge.py's gather_context/_tail_human_prompts already reconstructs real
+session continuity from the transcript for exactly this reason, and that
+is the layer this belongs at if it's rebuilt.
 """
 
 from __future__ import annotations
@@ -17,7 +34,9 @@ import re
 from prompt_coach.analysis.metrics import (
     has_constraints,
     has_example,
+    has_sections,
     has_structured_output,
+    is_bare_paste,
 )
 
 _BROAD_SCOPE = re.compile(r"\b(everything|all of|whole|revamp)\b", re.IGNORECASE)
@@ -38,6 +57,7 @@ SCORE_WEIGHTS = {
     "has_example": 10,
     "has_constraints": 10,
     "has_project_context": 10,
+    "has_sections": 5,
     "sweet_spot_length": 5,
     # Penalties (negative)
     "too_short": -10,
@@ -47,6 +67,7 @@ SCORE_WEIGHTS = {
     "vague_scope": -15,
     "too_long_rambling": -10,
     "multiple_asks": -10,
+    "bare_paste": -15,
 }
 
 
@@ -64,6 +85,8 @@ def score_prompt(text: str) -> int:
         score += SCORE_WEIGHTS["has_constraints"]
     if _PROJECT_REF.search(text):
         score += SCORE_WEIGHTS["has_project_context"]
+    if has_sections(text):
+        score += SCORE_WEIGHTS["has_sections"]
     if 50 <= length <= 300:
         score += SCORE_WEIGHTS["sweet_spot_length"]
 
@@ -82,6 +105,8 @@ def score_prompt(text: str) -> int:
         score += SCORE_WEIGHTS["too_long_rambling"]
     if _MULTIPLE_ASKS.search(text):
         score += SCORE_WEIGHTS["multiple_asks"]
+    if is_bare_paste(text):
+        score += SCORE_WEIGHTS["bare_paste"]
 
     return max(0, min(100, score))
 
@@ -100,6 +125,8 @@ def score_breakdown(text: str) -> dict:
         bonuses.append(("Constraints/boundaries set", SCORE_WEIGHTS["has_constraints"]))
     if _PROJECT_REF.search(text):
         bonuses.append(("Project context referenced", SCORE_WEIGHTS["has_project_context"]))
+    if has_sections(text):
+        bonuses.append(("Section headers structure prompt", SCORE_WEIGHTS["has_sections"]))
     if 50 <= length <= 300:
         bonuses.append(("Concise length (50-300 chars)", SCORE_WEIGHTS["sweet_spot_length"]))
 
@@ -117,6 +144,8 @@ def score_breakdown(text: str) -> dict:
         penalties.append(("Rambling (> 500 chars, no format)", SCORE_WEIGHTS["too_long_rambling"]))
     if _MULTIPLE_ASKS.search(text):
         penalties.append(("Multiple conflated asks", SCORE_WEIGHTS["multiple_asks"]))
+    if is_bare_paste(text):
+        penalties.append(("Mostly pasted, little instruction", SCORE_WEIGHTS["bare_paste"]))
 
     return {
         "score": score_prompt(text),

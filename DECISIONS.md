@@ -1096,3 +1096,43 @@ tests/test_plugin_migrate.py (new, 37 tests), tests/test_cli.py (20 new
 tests + `PROMPT_COACH_CLAUDE_HOME`/`find_repo_root` isolation in the shared
 `env` fixture), README. 370 tests (up from 318).
 **Decided by**: Alistair (go-ahead: "Start phase 2"), 2026-09-24.
+
+## 2026-09-25 - Structure signals read authored text only; bare pastes get their own trigger
+
+**Trigger**: review of WIP found on `main`, then a real-corpus test pass.
+The original complaint (2026-09-23): a bare pasted code block with no ask
+scored as a *good* prompt, because the fence counted as a worked example,
+and that inflated `example_rate`, `no_intervention_streak` and the score.
+The test pass found the same shape again: the general `Label:` pattern
+gave the sections bonus to pasted `systemctl`, motd, PowerShell and pip
+output.
+**Decision**: fix the cause, not each signal. `authored_text()` strips
+fenced blocks, recognisable machine-output lines (log levels, timestamps,
+tracebacks and their source-echo lines, shell prompts, padded or
+space-before-colon key-value columns, columnar gaps, pip progress, JSON,
+status glyphs) and runs of 5+ `Label: value` lines. Examples, constraints,
+output format, sections and rubric A4's list/label check all read from it.
+A fence counts as an example only when authored text just before it cues
+one ("like this:", "in this format:"). `is_bare_paste()` (>=60 non-space
+chars, <=20% authored, <12 authored words) adds a -15 penalty and a nudge
+tip asking what to do with the material; in coach/always mode it never
+rewrites-and-blocks, because a rewrite is kept ask-length and could drop
+the paste, which `/prompt-coach:accept` would then send without it.
+Also: the follow-up-message exemption was removed rather than patched (a
+first-word match fired on long real asks, and the lengths where it
+mattered are exactly where an isolated string can't tell); `promptSource`
+accepts `sdk` (verified: `typed` appears in 0 of 277,872 real lines).
+**Alternatives considered**: a curated section-word list (rejected: a
+closed list, the original review finding); a general `Label:` pattern with
+no paste handling (rejected: measured 1.64% of prompts, most of them
+pasted output); a per-signal special case for each paste shape (rejected:
+same bug would recur in the next signal).
+**Verified**: all three versions (`main`, WIP, fix) run side by side over
+3,722 real prompts; each fix mutation-checked. Sections 1.64% -> 0.70%,
+bare-paste flags 18 of 18 genuine, A4 unchanged.
+**Known limits**: pasted documents still read as sections about half the
+time; any percentage in a bullet counts as a constraint.
+**Affects**: analysis/metrics.py, score.py, rubric.py, nudge.py,
+stores/base.py, stores/claude_code.py, AGENTS.md, tests. 413 tests.
+**Decided by**: Alistair ("do 1 and (c)"), 2026-09-25.
+

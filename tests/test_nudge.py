@@ -719,3 +719,54 @@ class TestDirOverride(TestHermesPreLlmCall):
         cfg = make_cfg(tmp_path, mode="coach", dir_overrides={"/proj": "off"})
         resp = build_response(self._payload(LONG_WEAK, session_id="h5", cwd="/proj"), cfg)
         assert resp == {}
+
+
+PASTE = (
+    "Traceback (most recent call last):\n"
+    '  File "app.py", line 42, in <module>\n'
+    "    foo()\n"
+    "ValueError: bad thing\n"
+    "```\n" + "    x = compute(a, b)\n" * 8 + "```"
+)
+
+
+class TestBarePasteTrigger:
+    """A mostly-pasted prompt gets its own tip, and is never rewritten-and-
+    blocked: a rewrite is kept about as long as a good ask, so it could drop
+    the pasted material and /prompt-coach:accept would send the ask without
+    it (2026-09-24)."""
+
+    def _no_llm(self, monkeypatch):
+        def boom(*a, **k):
+            raise AssertionError("must not call the LLM for a bare paste")
+
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", boom)
+
+    def test_coach_mode_tips_without_blocking(self, tmp_path, monkeypatch):
+        self._no_llm(monkeypatch)
+        resp = build_response({"prompt": PASTE, "session_id": "p1"}, make_cfg(tmp_path))
+        assert "decision" not in resp
+        assert "mostly pasted" in resp["systemMessage"]
+
+    def test_always_mode_tips_without_rewriting(self, tmp_path, monkeypatch):
+        self._no_llm(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="always")
+        resp = build_response({"prompt": PASTE, "session_id": "p2"}, cfg)
+        assert "decision" not in resp
+        assert "mostly pasted" in resp["systemMessage"]
+
+    def test_auto_mode_directive_fires(self, tmp_path):
+        resp = build_response({"prompt": PASTE, "session_id": "p3"}, make_cfg(tmp_path, "auto"))
+        assert "pasted" in resp["hookSpecificOutput"]["additionalContext"]
+
+    def test_paste_with_a_real_ask_is_not_flagged_as_a_paste(self):
+        # It may still trip the separate no-output-shape trigger (it states
+        # no output format), just not the paste one.
+        from prompt_coach.nudge import _TIP_PASTE, _tip_for
+
+        prompt = (
+            "After the upgrade this test fails; I already tried clearing the cache and "
+            "pinning the old version. What else could cause it? Short answer please.\n" + PASTE
+        )
+        assert _tip_for(prompt) != _TIP_PASTE
+        assert _tip_for(PASTE) == _TIP_PASTE
