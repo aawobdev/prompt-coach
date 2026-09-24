@@ -3,12 +3,14 @@
 from datetime import UTC, datetime
 
 from prompt_coach.analysis.metrics import (
+    authored_text,
     compute_metrics,
     estimate_tokens,
     has_constraints,
     has_example,
     has_sections,
     has_structured_output,
+    is_bare_paste,
 )
 from prompt_coach.analysis.score import score_breakdown, score_prompt
 from prompt_coach.models import Prompt, PromptOrigin, SourceKind
@@ -104,8 +106,16 @@ class TestHasStructuredOutput:
         assert has_structured_output("table with columns")
 
     def test_list_format(self):
-        assert has_structured_output("list of items")
+        assert has_structured_output("give me a list of items")
         assert has_structured_output("Give me a list showing")
+        assert has_structured_output("can you print the detailed line item list")
+
+    def test_list_mention_without_an_output_verb_is_not_a_format(self):
+        """Real corpus 2026-09-24: bare "list of" was about half false
+        positives, and pushed those prompts into the >=70 streak band."""
+        assert not has_structured_output("Do you have the list of features outstanding?")
+        assert not has_structured_output("what's next on the list of fixes")
+        assert not has_structured_output("the repo has a list of ALL my projects")
 
     def test_no_format(self):
         assert not has_structured_output("Can you look at my inbox")
@@ -159,8 +169,15 @@ class TestHasExample:
         assert has_example("like this: foo")
         assert has_example("such as bar")
         assert has_example("example: baz")
-        assert has_example("```code```")
         assert has_example("input == output")
+
+    def test_fence_counts_only_when_cued(self):
+        """A fence is where pasted material lives: it's an example only when
+        the authored text right before it says so."""
+        assert not has_example("```code```")
+        assert not has_example("here's the output:\n```\nERROR boom\n```")
+        assert has_example('Expected output like this:\n```json\n{"a": 1}\n```')
+        assert has_example("in this format:\n```\nname | id\n```")
 
     def test_eg_realistic_phrasing(self):
         """A prior fix added `e.g.(?=\\s)` inside the outer \\b-wrapped
@@ -286,3 +303,74 @@ class TestScorePrompt:
         bonus_names = [b[0] for b in result["bonuses"]]
         assert "Output format specified" in bonus_names
         assert "Constraints/boundaries set" in bonus_names
+
+
+TRACEBACK = (
+    "Traceback (most recent call last):\n"
+    '  File "app.py", line 42, in <module>\n'
+    "    foo()\n"
+    "ValueError: bad thing\n"
+    "```\n"
+    "def foo():\n"
+    '    raise ValueError("bad thing")\n'
+    "```"
+)
+SYSTEMCTL = (
+    "\u25cf nginx.service - A high performance web server\n"
+    "     Loaded: loaded (/lib/systemd/system/nginx.service; enabled)\n"
+    "     Active: active (running) since Tue 2026-09-24 10:00:00 UTC; 2h ago\n"
+    "   Main PID: 1234 (nginx)\n"
+    "      Tasks: 3 (limit: 4915)\n"
+    "     Memory: 5.1M\n"
+    "        CPU: 120ms"
+)
+
+
+class TestPasteDetection:
+    """Pasted material can't earn structure signals it didn't author, and a
+    prompt that's mostly paste with little ask is flagged (2026-09-24). The
+    original bug: a bare fenced paste scored as a *good* prompt because the
+    fence counted as a worked example."""
+
+    def test_authored_text_strips_fences_output_lines_and_kv_dumps(self):
+        text = "Why does this fail?\n" + TRACEBACK + "\n" + SYSTEMCTL
+        assert authored_text(text).strip() == "Why does this fail?"
+
+    def test_compact_typed_spec_stays_authored(self):
+        text = "Goal: ship it\nContext: prod is down\nSteps: roll back\nOutput: a summary"
+        assert authored_text(text) == text
+
+    def test_bare_paste_detected(self):
+        assert is_bare_paste(TRACEBACK)
+        assert is_bare_paste(SYSTEMCTL)
+        assert is_bare_paste("```python\n" + "x = compute(a, b)\n" * 6 + "```")
+        assert is_bare_paste("fix this\n" + TRACEBACK)
+
+    def test_real_asks_are_not_pastes(self):
+        assert not is_bare_paste(
+            "Please go through the billing export and work out which customers churned "
+            "and why, then summarise it for me in a short table."
+        )
+        assert not is_bare_paste(
+            "This test fails after the upgrade and I've already tried clearing the cache "
+            "and pinning the old version. What else could cause it?\n" + TRACEBACK
+        )
+        assert not is_bare_paste("run it")  # too short to call
+
+    def test_pasted_output_earns_no_structure_signals(self):
+        for text in (TRACEBACK, SYSTEMCTL):
+            assert not has_example(text)
+            assert not has_sections(text)
+            assert not has_structured_output(text)
+            assert not has_constraints(text)
+
+    def test_repeated_or_lowercase_labels_are_not_sections(self):
+        assert not has_sections("Warning: a\nWarning: b\nWarning: c")
+        assert not has_sections("concurrency:\n  group: x\nruns-on: y")
+
+    def test_bare_paste_scores_low_and_says_why(self):
+        # Before: the fence earned the example bonus and nothing penalised
+        # the missing ask, so this scored 55-65. Now it's penalised.
+        result = score_breakdown(TRACEBACK)
+        assert result["score"] < 40
+        assert "Mostly pasted, little instruction" in [p[0] for p in result["penalties"]]

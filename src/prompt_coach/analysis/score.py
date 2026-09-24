@@ -36,6 +36,7 @@ from prompt_coach.analysis.metrics import (
     has_example,
     has_sections,
     has_structured_output,
+    is_bare_paste,
 )
 
 _BROAD_SCOPE = re.compile(r"\b(everything|all of|whole|revamp)\b", re.IGNORECASE)
@@ -66,6 +67,7 @@ SCORE_WEIGHTS = {
     "vague_scope": -15,
     "too_long_rambling": -10,
     "multiple_asks": -10,
+    "bare_paste": -15,
 }
 
 
@@ -103,6 +105,8 @@ def score_prompt(text: str) -> int:
         score += SCORE_WEIGHTS["too_long_rambling"]
     if _MULTIPLE_ASKS.search(text):
         score += SCORE_WEIGHTS["multiple_asks"]
+    if is_bare_paste(text):
+        score += SCORE_WEIGHTS["bare_paste"]
 
     return max(0, min(100, score))
 
@@ -140,6 +144,8 @@ def score_breakdown(text: str) -> dict:
         penalties.append(("Rambling (> 500 chars, no format)", SCORE_WEIGHTS["too_long_rambling"]))
     if _MULTIPLE_ASKS.search(text):
         penalties.append(("Multiple conflated asks", SCORE_WEIGHTS["multiple_asks"]))
+    if is_bare_paste(text):
+        penalties.append(("Mostly pasted, little instruction", SCORE_WEIGHTS["bare_paste"]))
 
     return {
         "score": score_prompt(text),

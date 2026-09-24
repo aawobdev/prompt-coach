@@ -71,7 +71,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from prompt_coach.analysis.docs import find_project_docs, is_redirect_stub
-from prompt_coach.analysis.metrics import has_constraints, has_example, has_structured_output
+from prompt_coach.analysis.metrics import (
+    has_constraints,
+    has_example,
+    has_structured_output,
+    is_bare_paste,
+)
 from prompt_coach.cache import CacheDB
 from prompt_coach.config import Config
 from prompt_coach.models import PromptOrigin
@@ -99,6 +104,11 @@ _TAIL_MAX_CHUNKS = 4  # give up after ~256KB scanned backwards from EOF
 _TIP_SHAPE = (
     "prompt-coach tip: no output format or worked example in that prompt -- "
     "consider stating the shape you want back, or giving a short example."
+)
+_TIP_PASTE = (
+    "prompt-coach tip: that's mostly pasted material with little instruction -- "
+    "say what you want done with it (fix, explain, review?) and what you've "
+    "already tried."
 )
 _TIP_SCOPE = (
     "prompt-coach tip: that's a big, open-ended ask with nothing scoping it -- "
@@ -141,6 +151,11 @@ def _is_short_and_vague(prompt: str) -> bool:
 def _tip_for(prompt: str) -> str | None:
     if _is_machine_prompt(prompt):
         return None
+    # Before the shape check: a bare paste used to read as well-structured
+    # (its own fence/formatting earned the example and structure signals),
+    # so this is the one trigger that catches it (2026-09-24).
+    if is_bare_paste(prompt):
+        return _TIP_PASTE
     if _is_long_unstructured(prompt):
         return _TIP_SHAPE
     if _is_short_and_vague(prompt):
@@ -319,7 +334,8 @@ _AUTO_RESPONSE = {
         "additionalContext": (
             "prompt-coach auto-improve: the user has automatic prompt "
             "improvement enabled, and this prompt tripped a weak-prompt "
-            "trigger (vague scope or no output shape). Before answering, "
+            "trigger (vague scope, no output shape, or mostly pasted material "
+            "with little instruction). Before answering, "
             "silently rewrite it into the clearer, better-scoped request "
             "the user most plausibly meant, grounded in this project and "
             "conversation: pin down scope and constraints if the ask is "
@@ -561,6 +577,14 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if mode == "always":
         if _is_machine_prompt(prompt):
             return {}  # harness traffic, not a prompt anyone typed
+        if is_bare_paste(prompt):
+            # A rewrite is kept "about as long as a well-written ask" (see
+            # _REWRITE_SYSTEM), so rewriting a mostly-pasted prompt risks
+            # dropping the pasted material -- /prompt-coach:accept would then
+            # send the ask without it. Tip instead, never block.
+            _record_audit(cfg, payload, prompt, trigger=_TIP_PASTE)
+            record_prompt(cfg.cache_dir, prompt, was_nudged=True)
+            return {"systemMessage": _TIP_PASTE}
         llm = _make_llm(cfg)
         context = gather_context(payload) if llm is not None else None
         result = _rewrite_or_fallback(
@@ -582,6 +606,11 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if tip is None or session_id in _load_nudged_sessions(cfg.cache_dir):
         return {}
     _record_nudge(cfg.cache_dir, session_id)
+    if tip == _TIP_PASTE:
+        # Same reason as always-mode above: never rewrite-and-block a paste.
+        _record_audit(cfg, payload, prompt, trigger=tip)
+        record_prompt(cfg.cache_dir, prompt, was_nudged=True)
+        return {"systemMessage": tip}
     llm = _make_llm(cfg)
     context = gather_context(payload) if llm is not None else None
     result = _rewrite_or_fallback(

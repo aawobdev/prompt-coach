@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from prompt_coach.analysis.metrics import (
     LIST_ITEM,
     SECTION_LABEL,
+    authored_text,
     has_constraints,
     has_example,
     has_structured_output,
@@ -106,10 +107,13 @@ def score_prompt_deterministic(p: Prompt) -> list[RuleScore]:
     # private _HEADING_OR_LIST regex (code review 2026-09-24: the same
     # "heading or list item" pattern existed independently here and in
     # metrics.py, with different marker sets that could silently drift).
+    # Read from authored_text so pasted logs/config don't count as the
+    # prompt's own structure (2026-09-24); a fence or tag is still a
+    # structure signal on its own (tagged/fenced specs are authored structure).
     if len(text) >= _A4_MIN_CHARS:
         structured = (
-            bool(LIST_ITEM.search(text))
-            or bool(SECTION_LABEL.search(text))
+            bool(LIST_ITEM.search(authored_text(text)))
+            or bool(SECTION_LABEL.search(authored_text(text)))
             or bool(_FENCED_OR_TAGGED.search(text))
         )
         add("A4", 1.0 if structured else 0.0)
