@@ -33,3 +33,26 @@ jobs:
             echo "Em dash found in a project doc -- house style forbids it (see AGENTS.md)."
             exit 1
           fi
+
+  plugin:
+    # Official manifest/hook validation for the Claude Code plugin under
+    # plugin/ and the marketplace at the repo root. Needs no login: checked
+    # 2026-09-24 in a clean HOME with no credentials (passes on the real
+    # plugin, exits 1 on a misspelt manifest field). Pinned so a Claude Code
+    # release can't change the result under us; bump deliberately.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Claude Code
+        run: npm install -g --no-fund --no-audit @anthropic-ai/claude-code@2.1.280
+
+      - name: Validate plugin and marketplace
+        run: |
+          claude plugin validate plugin --strict
+          claude plugin validate . --strict

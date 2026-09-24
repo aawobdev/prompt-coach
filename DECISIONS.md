@@ -1185,3 +1185,29 @@ install / code-only commit / reinstall sequence and fails without it.
 **Affects**: pyproject.toml, tests/test_install_freshness.py.
 **Decided by**: Alistair ("open the PR and merge it"), 2026-09-24.
 
+## 2026-09-24 - Plugin phase 4: validate in CI; drop the status-line offer
+
+**Trigger**: phase 4 of the plugin plan (optional): a status-line offer in
+`setup` and `claude plugin validate` in CI.
+**Decision 1**: add a `plugin` CI job that installs a pinned Claude Code
+(`2.1.280`) and runs `claude plugin validate --strict` on `plugin/` and the
+repo-root marketplace. It needs no credentials (verified in a clean HOME)
+and catches what tests/test_plugin.py can't: Claude Code's own schema
+(unknown or misspelt fields, wrong types). Pinned so a Claude Code release
+can't flip CI on its own; bump the pin on purpose. Proven in real CI with a
+throwaway canary branch (broken manifest -> `plugin` job failed, `test`
+passed), then deleted.
+**Decision 2**: drop the status-line offer. Entrypoints of real sessions,
+last 30 days: `claude-desktop` 211, `cli` 1, `sdk-cli` 17. The status line
+is documented as a terminal-UI feature; nothing says the desktop app
+renders it, so it would almost never be seen. Phase 3's SessionStart
+summary already puts the same numbers in front of the user in desktop
+sessions. Revisit if terminal use grows. Also not done from the original
+phase 4 list: skill-triggering evals (all three skills are user-only via
+`disable-model-invocation`, so there's no model triggering to evaluate)
+and a self-bootstrapping CLI install from the plugin (running an installer
+from a hook is riskier than the one-time `install.sh`).
+**Affects**: .github/workflows/ci.yml, STATUS.md.
+**Decided by**: Claude on the evidence above, under Alistair's "start
+phase 4", 2026-09-24; reversible if you want the status line anyway.
+
