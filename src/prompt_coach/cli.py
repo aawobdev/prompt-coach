@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from datetime import UTC, datetime, timedelta
@@ -162,6 +163,213 @@ def discover():
         typer.echo(f"{info.kind.value:12} {str(info.path):45} {status}{counts}")
 
 
+def _claude_home() -> Path:
+    """~/.claude, overridable for tests (PROMPT_COACH_CLAUDE_HOME) the same
+    way config.py's store paths are -- doctor/migrate-legacy read and write
+    settings.json/commands/ directly, which is a different concern from
+    config.py's Config (that's prompt-coach's own config; this is Claude
+    Code's), so it gets its own env var rather than joining that schema."""
+    override = os.environ.get("PROMPT_COACH_CLAUDE_HOME")
+    return Path(override).expanduser() if override else Path.home() / ".claude"
+
+
+@app.command()
+def doctor(json_format: bool = typer.Option(False, "--json", help="Output as JSON")):
+    """Read-only report on the Claude Code plugin: is `claude` on PATH, is
+    the plugin installed, and are the legacy hand-edited hooks/commands it
+    replaces still present (running both at once double-fires every
+    prompt). Never writes anything -- see `migrate-legacy` to act on it."""
+    import shutil as _shutil
+
+    from prompt_coach.plugin import find_repo_root, is_plugin_enabled, plan_migration
+
+    claude_home = _claude_home()
+    claude_bin = _shutil.which("claude")
+    repo_root = find_repo_root()
+    plugin_enabled = is_plugin_enabled(claude_home)
+    plan = plan_migration(claude_home)
+    double_fire = plugin_enabled and plan.has_legacy_hooks
+
+    if json_format:
+        typer.echo(
+            _json_dumps(
+                {
+                    "claude_cli": claude_bin,
+                    "repo_root": str(repo_root) if repo_root else None,
+                    "plugin_enabled": plugin_enabled,
+                    "legacy_hooks": [
+                        {"event": r.event, "command": r.command} for r in plan.hook_removals
+                    ],
+                    "legacy_commands": [str(p) for p in plan.legacy_command_files],
+                    "double_fire_risk": double_fire,
+                }
+            )
+        )
+        return
+
+    typer.echo("prompt-coach plugin doctor\n")
+    typer.echo(f"claude CLI:      {'found at ' + claude_bin if claude_bin else 'NOT on PATH'}")
+    typer.echo(f"plugin repo:     {repo_root if repo_root else 'not found (pass --repo by hand)'}")
+    typer.echo(f"plugin enabled:  {'yes' if plugin_enabled else 'no'}")
+    typer.echo(
+        f"legacy hooks:    {len(plan.hook_removals)} found"
+        + (f" ({', '.join(r.event for r in plan.hook_removals)})" if plan.hook_removals else "")
+    )
+    typer.echo(
+        f"legacy commands: {len(plan.legacy_command_files)} found"
+        + (
+            f" ({', '.join(p.name for p in plan.legacy_command_files)})"
+            if plan.legacy_command_files
+            else ""
+        )
+    )
+    typer.echo("")
+    if double_fire:
+        typer.echo(
+            "! Both the plugin and the legacy hooks are active -- every prompt is "
+            "nudged twice. Run `prompt-coach migrate-legacy` to remove the old ones."
+        )
+    elif not plugin_enabled:
+        typer.echo("Plugin not installed. Run `prompt-coach migrate-legacy` to install it.")
+    elif plan.needs_migration:
+        typer.echo(
+            "Plugin installed; some legacy files remain. Run `prompt-coach migrate-legacy` "
+            "to clean them up."
+        )
+    else:
+        typer.echo("All good -- plugin installed, no legacy hooks or commands left.")
+
+
+def _json_dumps(data: dict) -> str:
+    import json as _json
+
+    return _json.dumps(data, indent=2)
+
+
+@app.command("migrate-legacy")
+def migrate_legacy(
+    repo: str | None = typer.Option(
+        None, "--repo", help="Path to the prompt-coach repo (auto-detected via uv if omitted)"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask for confirmation"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show the plan; change nothing"),
+):
+    """Install the Claude Code plugin (if not already) and remove the
+    legacy hand-edited hooks/commands it replaces. Always shows the plan
+    and confirms before writing anything; backs up settings.json and every
+    legacy command file it touches first (see plugin.py's apply_* docs)."""
+    from click.exceptions import Abort
+
+    from prompt_coach.plugin import (
+        find_repo_root,
+        is_plugin_enabled,
+        is_valid_plugin_repo,
+        plan_migration,
+    )
+
+    claude_home = _claude_home()
+    repo_root = Path(repo).expanduser() if repo else find_repo_root()
+    plugin_enabled = is_plugin_enabled(claude_home)
+    plan = plan_migration(claude_home)
+    need_install = not plugin_enabled
+
+    if not need_install and not plan.needs_migration:
+        typer.echo("Nothing to do -- plugin already installed, no legacy hooks or commands found.")
+        return
+
+    typer.echo("prompt-coach migrate-legacy\n")
+    typer.echo("This will:")
+    if need_install:
+        if repo_root is None:
+            typer.echo(
+                "  - install the plugin -- but the repo location couldn't be auto-detected.\n"
+                "    Re-run with --repo /path/to/prompt-coach."
+            )
+            raise typer.Exit(1)
+        if not is_valid_plugin_repo(repo_root):
+            typer.echo(f"  ! {repo_root} doesn't look like the prompt-coach repo (no plugin/).")
+            raise typer.Exit(1)
+        typer.echo(f"  - install the plugin from {repo_root}")
+    for removal in plan.hook_removals:
+        typer.echo(f"  - remove the legacy {removal.event} hook ({removal.command})")
+    for path in plan.legacy_command_files:
+        typer.echo(f"  - back up and remove {path}")
+    typer.echo("")
+
+    if dry_run:
+        typer.echo("(--dry-run: nothing changed)")
+        return
+
+    if not yes:
+        try:
+            if not typer.confirm("Proceed?", default=False):
+                typer.echo("Cancelled -- nothing changed.")
+                return
+        except Abort:
+            # EOF on the prompt (no terminal): match setup's convention --
+            # cancelled, not a failure.
+            typer.echo(
+                "\nmigrate-legacy stopped early -- it asks for confirmation, so it needs a "
+                "real terminal. Run `prompt-coach migrate-legacy` in a shell."
+            )
+            raise typer.Exit(0) from None
+
+    if not _execute_migration(claude_home, repo_root, plan, need_install):
+        raise typer.Exit(1)
+
+
+def _execute_migration(claude_home: Path, repo_root: Path | None, plan, need_install: bool) -> bool:
+    """The write side of migrate-legacy, shared with setup's plugin-install
+    offer below: install (if needed), then remove whatever legacy hooks/
+    commands the plan found. Assumes the plan was already shown and
+    confirmed. Returns False (install failed, nothing else touched) or True.
+
+    `plan` is only used to decide *whether* there's anything to remove and
+    to report counts -- the removal itself always re-reads settings.json
+    fresh via plan_migration() right before writing. `claude plugin
+    install` (above) writes its own keys (enabledPlugins,
+    extraKnownMarketplaces) into that same file; a stale plan captured
+    before install ran would silently clobber that write when applied
+    after. Caught live 2026-09-24 running this end-to-end against a real
+    `claude` binary, not by the mocked-install unit tests -- see
+    tests/test_cli.py's test_migrate_legacy_installs_plugin_when_missing,
+    which now makes its install mock write to the file the same way, to
+    guard the fix."""
+    from prompt_coach.plugin import (
+        ClaudeCLIError,
+        apply_hook_removal,
+        backup_and_remove_legacy_commands,
+        install_plugin,
+        plan_migration,
+    )
+
+    if need_install:
+        try:
+            install_plugin(repo_root)
+        except ClaudeCLIError as exc:
+            typer.echo(f"Plugin install failed, nothing else touched: {exc}", err=True)
+            return False
+        typer.echo(f"Installed the plugin from {repo_root}.")
+
+    if plan.has_legacy_hooks or plan.has_legacy_commands:
+        plan = plan_migration(claude_home)
+
+    if plan.has_legacy_hooks:
+        backup = apply_hook_removal(claude_home / "settings.json", plan)
+        typer.echo(f"Removed {len(plan.hook_removals)} legacy hook(s) (backup: {backup}).")
+
+    if plan.has_legacy_commands:
+        backups = backup_and_remove_legacy_commands(plan)
+        for path, backup in zip(plan.legacy_command_files, backups, strict=True):
+            typer.echo(f"Removed {path.name} (backup: {backup}).")
+
+    typer.echo(
+        "\nDone. Running Claude Code sessions won't pick this up until they restart "
+        "or run /reload-plugins."
+    )
+    return True
+
+
 @app.command()
 def setup():
     """Interactive setup wizard: choose which stores are active, set the LLM
@@ -183,6 +391,57 @@ def setup():
             "(not via /prompt-coach)."
         )
         raise typer.Exit(0) from None
+
+
+def _offer_plugin_setup() -> None:
+    """Called once near the end of the setup wizard: offers to install the
+    Claude Code plugin and/or clean up the legacy hooks/commands it
+    replaces, reusing migrate-legacy's own plan + execute (see
+    _execute_migration above) so the two entry points never drift. Silent
+    when there's nothing to do, so re-running setup later doesn't nag."""
+    from click.exceptions import Abort
+
+    from prompt_coach.plugin import (
+        find_repo_root,
+        is_plugin_enabled,
+        is_valid_plugin_repo,
+        plan_migration,
+    )
+
+    claude_home = _claude_home()
+    plugin_enabled = is_plugin_enabled(claude_home)
+    plan = plan_migration(claude_home)
+    need_install = not plugin_enabled
+    if not need_install and not plan.needs_migration:
+        return
+
+    typer.echo("\nClaude Code plugin:")
+    if need_install:
+        typer.echo(
+            "  not installed -- this gives you the nudge hooks and /prompt-coach:* commands."
+        )
+    if plan.has_legacy_hooks or plan.has_legacy_commands:
+        typer.echo(
+            f"  {len(plan.hook_removals)} legacy hook(s) and {len(plan.legacy_command_files)} "
+            "legacy command file(s) found from the old hand-edited setup."
+        )
+
+    repo_root = find_repo_root()
+    if need_install and (repo_root is None or not is_valid_plugin_repo(repo_root)):
+        typer.echo(
+            "  Couldn't auto-detect the repo location -- run `prompt-coach migrate-legacy "
+            "--repo /path/to/prompt-coach` by hand later."
+        )
+        return
+
+    try:
+        do_it = typer.confirm("  Set it up now?", default=True)
+    except Abort:
+        return
+    if not do_it:
+        typer.echo("  Skipped -- run `prompt-coach migrate-legacy` any time.")
+        return
+    _execute_migration(claude_home, repo_root, plan, need_install)
 
 
 def _setup_wizard():
@@ -282,6 +541,8 @@ def _setup_wizard():
     path = config_file_path()
     write_config(new_cfg, path)
     typer.echo(f"\nSaved to {path}")
+
+    _offer_plugin_setup()
 
     if typer.confirm("\nRun a report now?", default=True):
         report(since=None, limit=None, sample=150, no_llm=False, refresh=False, out=None)

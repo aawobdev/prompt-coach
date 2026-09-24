@@ -78,6 +78,15 @@ def env(tmp_path, monkeypatch):
     # XDG_CONFIG_HOME when no explicit path is given, and `setup` writes
     # there, so this must be redirected for every CLI test, not just setup's.
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    # Isolates doctor/migrate-legacy from the real ~/.claude -- see
+    # cli.py's _claude_home().
+    monkeypatch.setenv("PROMPT_COACH_CLAUDE_HOME", str(tmp_path / "claude_home"))
+    # find_repo_root() reads uv's own tool receipt, which is real machine
+    # state (dev has prompt-coach uv-tool-installed for real) -- default it
+    # to "not found" like a clean machine, so setup's plugin-offer step and
+    # any test that doesn't care about repo-root discovery stays
+    # deterministic. Tests that DO care override this themselves.
+    monkeypatch.setattr("prompt_coach.plugin.find_repo_root", lambda: None)
     return tmp_path
 
 
@@ -416,6 +425,51 @@ def test_setup_wizard_dir_override_written(env):
     assert '"off"' in written
 
 
+def test_setup_wizard_notes_when_repo_root_cant_be_found(env):
+    # Nothing installed, and the env fixture defaults find_repo_root() to
+    # None (a clean machine) -- the offer step should say so and NOT
+    # consume a confirm prompt (the existing 8-blanks + 3 answers below
+    # already proves that: a stray extra prompt would desync the answers
+    # and fail the config-write assertions the same way this test's sibling
+    # above does).
+    answers = "\n" * 8 + "n\nn\nn\n"
+    result = runner.invoke(app, ["setup"], input=answers)
+    assert result.exit_code == 0, result.output
+    assert "Claude Code plugin:" in result.output
+    assert "Couldn't auto-detect the repo location" in result.output
+
+
+def test_setup_wizard_silent_when_plugin_already_set_up(env):
+    claude_home = env / "claude_home"
+    claude_home.mkdir(parents=True)
+    (claude_home / "settings.json").write_text(
+        json.dumps({"enabledPlugins": {"prompt-coach@prompt-coach": True}})
+    )
+    answers = "\n" * 8 + "n\nn\nn\n"
+    result = runner.invoke(app, ["setup"], input=answers)
+    assert result.exit_code == 0, result.output
+    assert "Claude Code plugin:" not in result.output
+
+
+def test_setup_wizard_offers_and_installs_the_plugin(env, monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "plugin" / ".claude-plugin").mkdir(parents=True)
+    (repo / ".claude-plugin").mkdir()
+    (repo / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"plugins": [{"name": "prompt-coach", "source": "./plugin"}]})
+    )
+    (repo / "plugin" / ".claude-plugin" / "plugin.json").write_text("{}")
+    monkeypatch.setattr("prompt_coach.plugin.find_repo_root", lambda: repo)
+    calls = []
+    monkeypatch.setattr("prompt_coach.plugin.install_plugin", lambda root, **k: calls.append(root))
+
+    answers = "\n" * 8 + "n\ny\nn\nn\n"  # ...dir-override(n), plugin-offer(y), report(n), dash(n)
+    result = runner.invoke(app, ["setup"], input=answers)
+    assert result.exit_code == 0, result.output
+    assert calls == [repo]
+    assert "Installed the plugin" in result.output
+
+
 def test_setup_without_a_terminal_exits_cleanly(env, monkeypatch):
     # Without a TTY the first typer.confirm hits EOF and click raises Abort
     # -- exactly what happens when setup runs via the /prompt-coach slash
@@ -446,3 +500,246 @@ def test_dash_no_sync_skips_sync(env, monkeypatch):
 
     runner.invoke(app, ["dash", "--plain"])
     assert calls == [1]
+
+
+# ---------------------------------------------------------------------------
+# doctor / migrate-legacy: typer.CliRunner level, real filesystem writes
+# under env's isolated PROMPT_COACH_CLAUDE_HOME, `claude` always mocked via
+# prompt_coach.plugin.install_plugin (see tests/test_plugin_migrate.py for
+# the unit-level coverage of that function itself).
+# ---------------------------------------------------------------------------
+
+
+def _write_legacy_setup(claude_home, *, plugin_enabled=False):
+    """The exact hand-authored state this plugin replaces (README.md /
+    DECISIONS.md 2026-08-07/2026-09-20): two shell-form nudge hooks and
+    three slash command files. plugin_enabled=True additionally marks the
+    plugin as already installed, for tests of the removal-only path that
+    don't want migrate-legacy's repo-root resolution in play at all (dev's
+    own uv-tool-installed prompt-coach makes that resolution depend on
+    real, uncontrolled machine state -- see DECISIONS.md 2026-09-24)."""
+    claude_home.mkdir(parents=True, exist_ok=True)
+    (claude_home / "settings.json").write_text(
+        json.dumps(
+            {
+                "enabledPlugins": {"prompt-coach@prompt-coach": True} if plugin_enabled else {},
+                "hooks": {
+                    "UserPromptSubmit": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "/home/x/.local/bin/prompt-coach nudge",
+                                    "timeout": 25,
+                                }
+                            ]
+                        }
+                    ],
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "/home/x/.local/bin/prompt-coach nudge",
+                                    "timeout": 10,
+                                }
+                            ]
+                        }
+                    ],
+                },
+                "model": "opus",
+            }
+        )
+    )
+    commands = claude_home / "commands"
+    commands.mkdir(parents=True, exist_ok=True)
+    for name in ("prompt-coach.md", "coach-accept.md", "coach-original.md"):
+        (commands / name).write_text(f"# {name}\n")
+
+
+def test_doctor_on_a_clean_machine(env):
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "plugin enabled:  no" in result.output
+    assert "legacy hooks:    0 found" in result.output
+    assert "Plugin not installed" in result.output
+
+
+def test_doctor_json_reports_legacy_state(env):
+    _write_legacy_setup(env / "claude_home")
+    result = runner.invoke(app, ["doctor", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert len(data["legacy_hooks"]) == 2
+    assert len(data["legacy_commands"]) == 3
+    assert data["plugin_enabled"] is False
+
+
+def test_doctor_flags_double_fire_risk(env):
+    claude_home = env / "claude_home"
+    _write_legacy_setup(claude_home, plugin_enabled=True)
+
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "nudged twice" in result.output
+
+
+def test_migrate_legacy_nothing_to_do(env):
+    claude_home = env / "claude_home"
+    claude_home.mkdir(parents=True)
+    (claude_home / "settings.json").write_text(
+        json.dumps({"enabledPlugins": {"prompt-coach@prompt-coach": True}})
+    )
+    result = runner.invoke(app, ["migrate-legacy"])
+    assert result.exit_code == 0
+    assert "Nothing to do" in result.output
+
+
+def test_migrate_legacy_dry_run_changes_nothing(env):
+    claude_home = env / "claude_home"
+    # plugin_enabled=True: this test is about the confirmation/dry-run
+    # mechanics, not repo-root resolution for an install.
+    _write_legacy_setup(claude_home, plugin_enabled=True)
+    original = (claude_home / "settings.json").read_text()
+
+    result = runner.invoke(app, ["migrate-legacy", "--dry-run"])
+    assert result.exit_code == 0
+    assert "remove the legacy UserPromptSubmit hook" in result.output
+    assert (claude_home / "settings.json").read_text() == original
+    assert (claude_home / "commands" / "coach-accept.md").exists()
+
+
+def test_migrate_legacy_declined_changes_nothing(env):
+    claude_home = env / "claude_home"
+    _write_legacy_setup(claude_home, plugin_enabled=True)
+    original = (claude_home / "settings.json").read_text()
+
+    result = runner.invoke(app, ["migrate-legacy"], input="n\n")
+    assert result.exit_code == 0
+    assert "Cancelled" in result.output
+    assert (claude_home / "settings.json").read_text() == original
+
+
+def test_migrate_legacy_without_a_terminal_exits_cleanly(env, monkeypatch):
+    # As with setup (see test_setup_without_a_terminal_exits_cleanly):
+    # CliRunner's exhausted input stream feeds typer.confirm its default
+    # instead of raising Abort, so inject the Abort directly to reproduce
+    # what a real EOF (e.g. via the /prompt-coach slash command) does.
+    from click.exceptions import Abort
+
+    claude_home = env / "claude_home"
+    _write_legacy_setup(claude_home, plugin_enabled=True)
+
+    def raise_abort(*a, **k):
+        raise Abort()
+
+    monkeypatch.setattr("typer.confirm", raise_abort)
+    result = runner.invoke(app, ["migrate-legacy"])
+    assert result.exit_code == 0
+    assert "needs a real terminal" in result.output
+
+
+def test_migrate_legacy_removes_hooks_and_commands_only(env, monkeypatch):
+    # Plugin already enabled -- only the removal half runs, no claude subprocess.
+    claude_home = env / "claude_home"
+    _write_legacy_setup(claude_home, plugin_enabled=True)
+
+    def boom(*a, **k):
+        raise AssertionError("install_plugin should not run when already enabled")
+
+    monkeypatch.setattr("prompt_coach.plugin.install_plugin", boom)
+
+    result = runner.invoke(app, ["migrate-legacy", "--yes"])
+    assert result.exit_code == 0, result.output
+    after = json.loads((claude_home / "settings.json").read_text())
+    assert "hooks" not in after
+    assert after["model"] == "opus"  # unrelated key survives
+    assert not (claude_home / "commands" / "coach-accept.md").exists()
+    assert any(
+        p.name.startswith("coach-accept.md.bak-") for p in (claude_home / "commands").iterdir()
+    )
+
+
+def test_migrate_legacy_installs_plugin_when_missing(env, monkeypatch, tmp_path):
+    claude_home = env / "claude_home"
+    _write_legacy_setup(claude_home)
+    repo = tmp_path / "repo"
+    (repo / "plugin" / ".claude-plugin").mkdir(parents=True)
+    (repo / ".claude-plugin").mkdir()
+    (repo / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"plugins": [{"name": "prompt-coach", "source": "./plugin"}]})
+    )
+    (repo / "plugin" / ".claude-plugin" / "plugin.json").write_text("{}")
+
+    calls = []
+
+    def fake_install(root, **k):
+        # The real `claude plugin install` writes its own keys into this
+        # same settings.json -- reproduce that side effect so this test
+        # would have caught the stale-plan-clobbers-the-install-write bug
+        # found live 2026-09-24 (see _execute_migration's docstring).
+        calls.append(root)
+        settings_path = claude_home / "settings.json"
+        settings = json.loads(settings_path.read_text())
+        settings["enabledPlugins"] = {"prompt-coach@prompt-coach": True}
+        settings_path.write_text(json.dumps(settings))
+
+    # --repo is passed explicitly below, so find_repo_root() is never
+    # consulted here -- only install_plugin needs mocking.
+    monkeypatch.setattr("prompt_coach.plugin.install_plugin", fake_install)
+
+    result = runner.invoke(app, ["migrate-legacy", "--repo", str(repo), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert calls == [repo]
+    assert "Installed the plugin" in result.output
+    after = json.loads((claude_home / "settings.json").read_text())
+    assert "hooks" not in after
+    assert after["enabledPlugins"] == {
+        "prompt-coach@prompt-coach": True
+    }  # install's write survives
+
+
+def test_migrate_legacy_install_failure_leaves_hooks_untouched(env, monkeypatch, tmp_path):
+    claude_home = env / "claude_home"
+    _write_legacy_setup(claude_home)
+    repo = tmp_path / "repo"
+    (repo / "plugin" / ".claude-plugin").mkdir(parents=True)
+    (repo / ".claude-plugin").mkdir()
+    (repo / ".claude-plugin" / "marketplace.json").write_text(
+        json.dumps({"plugins": [{"name": "prompt-coach", "source": "./plugin"}]})
+    )
+    (repo / "plugin" / ".claude-plugin" / "plugin.json").write_text("{}")
+    original = (claude_home / "settings.json").read_text()
+
+    from prompt_coach.plugin import ClaudeCLIError
+
+    def fail(*a, **k):
+        raise ClaudeCLIError(["claude"], 1, "boom")
+
+    monkeypatch.setattr("prompt_coach.plugin.install_plugin", fail)
+
+    result = runner.invoke(app, ["migrate-legacy", "--repo", str(repo), "--yes"])
+    assert result.exit_code == 1
+    assert "Plugin install failed, nothing else touched" in result.output
+    assert (claude_home / "settings.json").read_text() == original
+    assert (claude_home / "commands" / "coach-accept.md").exists()
+
+
+def test_migrate_legacy_unknown_repo_location(env):
+    # Plugin not enabled, no --repo given, and env already makes
+    # find_repo_root() report "not found" (see the env fixture).
+    claude_home = env / "claude_home"
+    claude_home.mkdir(parents=True)
+
+    result = runner.invoke(app, ["migrate-legacy"])
+    assert result.exit_code == 1
+    assert "--repo" in result.output
+
+
+def test_migrate_legacy_rejects_a_path_that_is_not_the_repo(env, tmp_path):
+    claude_home = env / "claude_home"
+    claude_home.mkdir(parents=True)
+    (claude_home / "settings.json").write_text(json.dumps({"enabledPlugins": {}}))
+    result = runner.invoke(app, ["migrate-legacy", "--repo", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "doesn't look like the prompt-coach repo" in result.output

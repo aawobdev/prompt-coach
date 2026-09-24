@@ -1,7 +1,53 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-20 by Claude (Sonnet 5): Claude Code plugin (phase 1
-of 4): hooks and slash commands now ship in `plugin/` instead of hand-edited
-`~/.claude/`. 318 tests.
+Last updated: 2026-09-24 by Claude (Sonnet 5): Claude Code plugin (phase 2
+of 4): `doctor` and `migrate-legacy` install the plugin and clean up the
+legacy hooks/commands, so `install.sh` -> `setup` gets a fresh machine all
+the way to a working plugin. 370 tests.
+
+## Claude Code plugin, phase 2: doctor + migrate-legacy (2026-09-24)
+
+Closes the "phase 1 shipped the plugin but nothing installs or migrates it"
+gap noted at the end of phase 1 below. DECISIONS.md (2026-09-24) has the
+full reasoning. Shipped on branch `claude/prompt-coach-claude-features-4d502e`:
+- `plugin.py`: `find_repo_root()` reads `uv`'s own tool receipt
+  (`uv tool dir`/`<name>/uv-receipt.toml`) to locate this repo without a new
+  marker file -- `uv tool install .` copies the package into an isolated
+  venv, so nothing under the installed CLI's own path points back at the
+  checkout. `plan_migration()` reads `~/.claude/settings.json` and
+  `~/.claude/commands/` and returns exactly what would change, touching
+  nothing. `install_plugin()` shells out to the real `claude` CLI
+  (`plugin marketplace add` + `plugin install ... -y`) rather than
+  hand-writing `enabledPlugins`/`extraKnownMarketplaces` -- both calls are
+  idempotent, verified live against a sandboxed `~/.claude`.
+- `prompt-coach doctor` (`--json` too): read-only report on claude-CLI
+  presence, plugin-enabled state, legacy hooks/commands found, and a
+  flagged double-fire risk when both the plugin and the legacy hooks are
+  active at once.
+- `prompt-coach migrate-legacy` (`--repo`, `--dry-run`, `--yes`): shows the
+  plan, confirms, then installs (if needed) and removes the legacy
+  hooks/commands (if any) -- backing up `settings.json` and every legacy
+  command file first (`<file>.bak-<timestamp>`, same convention already
+  used by hand for `CLAUDE.md` on this machine). Install failure leaves
+  the legacy hooks untouched (never ends up with neither working).
+- `setup` now offers the same flow near the end, silently, only when
+  there's something to do.
+- Found and fixed live, not by the mocked-install unit tests: applying a
+  hook-removal plan captured *before* `install_plugin()` ran clobbered the
+  real `claude` CLI's own settings.json write (`enabledPlugins`,
+  `extraKnownMarketplaces`) the moment later. `_execute_migration` now
+  re-reads the plan fresh right before writing; the regression test's
+  install mock now writes to the file the way the real CLI does, to catch
+  this class of bug going forward.
+- `tests/test_plugin_migrate.py` (37 tests, unit-level, no real `claude`)
+  and 20 new tests in `test_cli.py` (doctor/migrate-legacy/setup-offer,
+  CliRunner level, `claude` always mocked). Verified live end-to-end
+  twice more: a sandboxed `~/.claude` with the real `claude` binary
+  (Claude Code's own bundled CLI, `$CLAUDE_CODE_EXECPATH` -- the copy at
+  `~/.hermes/node/.../bin/claude.exe` turned out to be a broken 500-byte
+  postinstall stub as of 2026-09-23, unrelated to this repo, flagged
+  separately) both before and after the fix above.
+- Not done: nothing calls `install_plugin`/`migrate-legacy` automatically
+  from `install.sh` itself -- `setup` is still a separate, opt-in step.
 
 ## Claude Code plugin, phase 1 (2026-09-20)
 
