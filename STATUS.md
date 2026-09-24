@@ -1,8 +1,28 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-24 by Claude (Opus 5.5): last paste-detection gap
-closed with provenance rules -- pasted terminal sessions and chat logs are
-stripped from authored text, artifact-comment relays are harness traffic.
-446 tests.
+Last updated: 2026-09-24 by Claude (Opus 5.5): Hermes rows now split into
+what was typed vs what the gateway and agent wrote. 471 tests.
+
+## Hermes classification (2026-09-24)
+
+`stats` counted every Hermes "user" row as a typed prompt, but the store
+holds every turn the agent received. Cron jobs, subagents, retry notices
+and background-process events were scored as the user's prompts, and
+Slack rows carried quoted bot replies and whole skill bodies, which is
+where the 16% example rate came from.
+- `stores/hermes.py` strips gateway wrappers and classifies by session
+  source and what's left (see AGENTS.md, Session stores).
+- `HermesStore.parser_version = 2`; the cache purges and re-reads a store
+  whose parser version changed, so the fix applies on the next sync with
+  no `cache clear` (which would also wipe the audit log).
+- Real data, `main` vs branch (Hermes only, 30 days): human rows 1,062 ->
+  365, example rate 67% -> 1%, sections 70% -> 0.3%, median 1,759 -> 42
+  chars. All stores, `stats --since 30d` on a copy of the live cache:
+  4,650 -> 3,952 human prompts, example rate 16% -> 1%, constraints 19% ->
+  5%, structured output 3% -> 1%. Audit log untouched (16 rows).
+- Left as typed text on purpose: 7 inlined documents (`[Content of x]:`),
+  which paste detection judges like any paste; 2 `/skill` invocations in
+  cli are machine (the typed text sits inside a 10-34k char skill body).
+- Each rule has an isolating test; all 27 mutants killed.
 
 ## Paste detection: provenance for the last gap (2026-09-24)
 

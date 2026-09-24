@@ -207,16 +207,44 @@ class CacheDB:
                 stats.stores_failed[store.kind.value] = info.detail or "unavailable"
             else:
                 try:
+                    reparse = self._parser_changed(store)
                     if hasattr(store, "iter_files"):
-                        self._sync_by_files(store, stats, force)
+                        self._sync_by_files(store, stats, force or reparse)
                     else:
-                        self._sync_by_watermark(store, stats, force)
+                        self._sync_by_watermark(store, stats, force or reparse)
+                    if reparse:
+                        self._record_parser_version(store)
                 except Exception as exc:  # noqa: BLE001 - one bad store must not kill sync
                     stats.stores_failed[store.kind.value] = type(exc).__name__
             if on_store:
                 on_store(store.kind.value, True)
         self.conn.commit()
         return stats
+
+    def _parser_changed(self, store) -> bool:
+        """True (after purging the store's cached rows) when the store's
+        parser_version differs from the one its rows were parsed with.
+
+        Rows are INSERT OR IGNORE on (source, session_id, message_ref), so
+        a forced sync alone never rewrites a row a changed parser now reads
+        differently. A store without the attribute, and a cache that never
+        recorded one, both count as version 1.
+        """
+        version = getattr(store, "parser_version", 1)
+        row = self.conn.execute(
+            "SELECT offset FROM file_state WHERE path=?", (f"parser:{store.kind.value}",)
+        ).fetchone()
+        if (row["offset"] if row else 1) == version:
+            return False
+        self.conn.execute("DELETE FROM prompts WHERE source=?", (store.kind.value,))
+        self.conn.execute("INSERT INTO prompts_fts(prompts_fts) VALUES('rebuild')")
+        return True
+
+    def _record_parser_version(self, store) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO file_state VALUES (?,?,?,?)",
+            (f"parser:{store.kind.value}", 0.0, 0, getattr(store, "parser_version", 1)),
+        )
 
     def _insert(self, p: Prompt, stats: SyncStats) -> None:
         stats.scanned += 1

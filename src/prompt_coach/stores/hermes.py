@@ -8,18 +8,20 @@ StoreInfo instead of raising.
 
 from __future__ import annotations
 
+import re
 import sqlite3
+from collections import Counter
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-from prompt_coach.models import Prompt, SourceKind, StoreInfo
+from prompt_coach.models import Prompt, PromptOrigin, SourceKind, StoreInfo
 from prompt_coach.stores.base import classify_origin, content_hash
 
 # s.model is session-level, not per-turn -- Hermes has no per-message model
 # column, unlike Claude Code/Codex where the model can change mid-session.
 _PROMPT_QUERY = """
-SELECT m.id, m.session_id, m.content, m.timestamp, s.cwd, s.git_repo_root, s.model
+SELECT m.id, m.session_id, m.content, m.timestamp, s.source, s.cwd, s.git_repo_root, s.model
 FROM messages m
 JOIN sessions s ON s.id = m.session_id
 WHERE m.role = 'user'
@@ -30,9 +32,104 @@ WHERE m.role = 'user'
 ORDER BY m.timestamp
 """
 
+# Hermes stores every turn the agent receives as role='user', and the gateway
+# wraps what the person typed in its own metadata. Formats verified against
+# the live state.db 2026-09-24 (2,829 user rows). Nobody types in a cron job
+# or a delegated subagent: every row from those sessions is machine-written.
+_MACHINE_SOURCES = frozenset({"cron", "subagent"})
+
+# Leading wrappers, stripped repeatedly until none match. Each is gateway
+# text around (or quoted into) the typed message, never typed itself.
+# Replying-to quotes the bot message a Slack reply answers (1,428 rows);
+# the thread block replays earlier thread messages (405).
+_REPLYING_TO = re.compile(r'\[Replying to: ".*?"\]\s*\n\s*\n', re.S)
+_THREAD_CONTEXT = re.compile(
+    r"\[Thread context\b.*?^\[End of thread context\][ \t]*\n?", re.S | re.M
+)
+# Bracketed notices whose body can span lines (an image notice carries a
+# vision description), so the end is found by bracket balance, not regex.
+# Note: model-switch notice (cli). The user sent: attachment notice, with
+# its follow-up "If you need a closer look" hint.
+_NOTICE_OPENERS = ("[Note:", "[The user sent ", "[If you need a closer look")
+# Multi-user Slack channels prefix each message with the sender. One word,
+# then "] " -- "[Content of x.txt]:" (inlined document header) is not one.
+_SPEAKER = re.compile(r"\[([A-Za-z][\w.'-]{0,30})\][ \t]*")
+# An auto-loaded skill injects its whole SKILL.md ahead of the typed text;
+# the injected block always closes with this sentence (126 of 126 rows).
+_SKILL_HEADER = re.compile(r'\[IMPORTANT: The "[^"\n]+" skill is auto-loaded\.')
+_SKILL_END = "then run them with the terminal tool using the absolute path."
+
+# Left at the front after the wrappers go: the agent talking to itself
+# (retry notices, background-process and delegation events, compaction
+# summaries).
+_MACHINE_OPENERS = re.compile(
+    r"\[(?:IMPORTANT:|System:|CONTEXT COMPACTION\b|PRIOR CONTEXT\b|ASYNC DELEGATION\b)"
+)
+
+
+def _bracket_end(text: str) -> int | None:
+    """Index just past the ']' that closes the '[' at text[0]."""
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return None
+
+
+def unwrap(content: str) -> tuple[str, list[str], bool]:
+    """Strip Hermes gateway wrappers from a user row.
+
+    Returns (typed text, speaker labels seen, cut) where cut is True when a
+    wrapper had no recognisable end, so the typed text can't be isolated.
+    """
+    text = content.strip()
+    speakers: list[str] = []
+    while True:
+        before = text
+        if m := _REPLYING_TO.match(text) or _THREAD_CONTEXT.match(text):
+            text = text[m.end() :]
+        elif text.startswith(_NOTICE_OPENERS):
+            end = _bracket_end(text)
+            if end is None:
+                return "", speakers, True
+            text = text[end:]
+        elif _SKILL_HEADER.match(text):
+            end = text.find(_SKILL_END)
+            if end < 0:
+                return "", speakers, True
+            text = text[end + len(_SKILL_END) :]
+        elif m := _SPEAKER.match(text):
+            speakers.append(m.group(1))
+            text = text[m.end() :]
+        text = text.strip()
+        if text == before:
+            return text, speakers, False
+
+
+def _owner(conn: sqlite3.Connection) -> str | None:
+    """The dominant Slack speaker label: whose prompts these are.
+
+    Other labels ("[Jamie]" in a shared channel) are someone else typing.
+    Counted over every row, not the sync window, so an incremental sync
+    can't flip the owner.
+    """
+    counts: Counter[str] = Counter()
+    for (content,) in conn.execute(
+        "SELECT content FROM messages WHERE role = 'user' AND content LIKE '%[%] %'"
+    ):
+        counts.update(unwrap(content)[1])
+    return counts.most_common(1)[0][0] if counts else None
+
 
 class HermesStore:
     kind = SourceKind.HERMES
+    # Bump when iter_prompts changes what it yields for rows already cached;
+    # the cache re-reads the whole store on a mismatch. 2: gateway wrappers.
+    parser_version = 2
 
     def __init__(self, db_path: Path | None = None):
         self.db_path = (db_path or Path("~/.hermes/state.db")).expanduser()
@@ -70,10 +167,23 @@ class HermesStore:
             return
         since_epoch = since.timestamp() if since else 0.0
         with self._connect() as conn:
+            owner = _owner(conn)
             for row in conn.execute(_PROMPT_QUERY, {"since": since_epoch}):
-                content = row["content"]
-                if not content.strip():
+                raw = row["content"]
+                if not raw.strip():
                     continue
+                typed, speakers, cut = unwrap(raw)
+                if owner and any(s != owner for s in speakers):
+                    continue  # someone else's message in a shared channel
+                machine = (
+                    cut
+                    or row["source"] in _MACHINE_SOURCES
+                    or bool(_MACHINE_OPENERS.match(typed))
+                    or classify_origin(typed) is PromptOrigin.MACHINE
+                )
+                if not machine and not typed:
+                    continue  # attachment or quote only: nothing was typed
+                content = raw if machine else typed
                 yield Prompt(
                     source=self.kind,
                     session_id=row["session_id"],
@@ -81,7 +191,7 @@ class HermesStore:
                     content=content,
                     content_hash=content_hash(content),
                     timestamp=datetime.fromtimestamp(row["timestamp"], tz=UTC),
-                    origin=classify_origin(content),
+                    origin=PromptOrigin.MACHINE if machine else PromptOrigin.HUMAN,
                     cwd=row["cwd"],
                     git_repo=row["git_repo_root"],
                     model=row["model"],
