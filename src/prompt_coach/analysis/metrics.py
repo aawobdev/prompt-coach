@@ -74,6 +74,7 @@ _OUTPUT_LINE = re.compile(
       | (?:Collecting|Downloading|Requirement\ already\ satisfied
         |Installing\ collected|Successfully\ installed|Using\ cached|Building\ wheel)\b
       | .*(?:\ \.){3,}
+      | .*\S\s+\.\s*:(?:\s|$)
       | \s*[{}\[\]]
       | \s*"[^"\n]+"\s*:
       | \s*[\u25cf\u2502\u251c\u2514\u250c\u2510\u2518\u2524\u252c\u2534\u253c\u2500]
@@ -115,8 +116,15 @@ LIST_ITEM = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+", re.MULTILINE)
 # genuinely unconstrained "revamp everything" + bullet-list prompts).
 # Real constraint-bearing bullets from this repo's own test fixtures still
 # match: "CPU/RAM usage < 30% for 7 days", "idle for > 30 days".
+# A percentage counts only next to a bound ("below 50%", "< 30%"): a bare
+# figure is a reading, not a limit -- "- Related context: 72%" and
+# "3. So I'm not 100%" were counted as constraints on the real corpus
+# (2026-09-24).
 _IMPLICIT_CONSTRAINT = re.compile(
-    LIST_ITEM.pattern + r".*(?:\d+\s*%|\d+\s*(?:days?|hours?|minutes?|weeks?|months?|years?)\b"
+    LIST_ITEM.pattern
+    + r".*(?:\b(?:under|below|over|above|up\s+to|at\s+most|less\s+than|more\s+than"
+    r"|max(?:imum)?|min(?:imum)?)\s+\d+(?:\.\d+)?\s*%"
+    r"|\d+\s*(?:days?|hours?|minutes?|weeks?|months?|years?)\b"
     r"|[<>]=?\s*\d|\d\s*[<>]=?|\bwithin\b|\bat least\b|\bno more than\b)",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -133,6 +141,8 @@ SECTION_LABEL = re.compile(r"^\s*(?:#{1,4}\s|\w[\w /]{0,30}:\s)", re.MULTILINE)
 # (YAML keys, "sudo:", "bash:"), and so are deeply indented ones
 # (`     Loaded:` in systemctl status) -- both seen in the real corpus
 # 2026-09-24.
+_SECTION_MIN_VALUE_WORDS = 4
+_SECTION_MIN_DENSITY = 0.5  # counted labels per 1,000 chars of the whole prompt
 _SECTION_NAME = re.compile(r"^ {0,2}(?:#{1,4}\s+(\S.*)|([A-Z][\w /]{0,30}):\s)", re.MULTILINE)
 # Signals a requested output shape. `table`/`columns`/`tabular` bare words
 # were removed here (code review 2026-09-24): they matched any mention of
@@ -231,16 +241,51 @@ def has_structured_output(text: str) -> bool:
 
 
 def has_sections(text: str) -> bool:
-    """2+ distinct headings or capitalised "Label:" lines in the authored
-    text = a prompt organised into sections. Distinct, so a paste that
-    repeats one label ("Warning:" x4) doesn't count. Deliberately excludes
-    bare list items (LIST_ITEM): two plain bullets aren't "sectioned", and
-    has_constraints' implicit-list branch already credits lists."""
-    names = {
-        (heading or label).strip().lower()
-        for heading, label in _SECTION_NAME.findall(authored_text(text))
-    }
-    return len(names) >= 2
+    """2+ section labels in the authored text = a prompt organised into
+    sections. Deliberately excludes bare list items (LIST_ITEM): two plain
+    bullets aren't "sectioned", and has_constraints' implicit-list branch
+    already credits lists.
+
+    Three shape rules separate typed sections from pasted documents (forms,
+    contracts, help text, logs), calibrated on the real corpus 2026-09-24,
+    where about 18 of the 26 prompts this used to credit were pastes:
+    - any label repeated -> records or a log, not sections ("By:" x6,
+      "TIMING:" x3, ipconfig adapters);
+    - a "Label:" counts only as a header with a body under it (empty value,
+      then non-label text before the next label) or with a prose value of
+      _SECTION_MIN_VALUE_WORDS+ words; 1-3 word values are form fields
+      ("CMDKEY: x", "Count: 5"). Markdown headings need a body too;
+    - at least _SECTION_MIN_DENSITY counted labels per 1,000 chars of the
+      whole prompt, so a few labels buried in a pasted document (a 22,700
+      char contract with 3) don't make the prompt "sectioned". Typed
+      sectioned prompts in the corpus all sat at 0.67 or above."""
+    authored = authored_text(text)
+    matches = list(_SECTION_NAME.finditer(authored))
+    seen: list[str] = []
+    counted: set[str] = set()
+    for i, match in enumerate(matches):
+        heading, label = match.group(1), match.group(2)
+        name = (heading or label).strip().lower()
+        seen.append(name)
+        # Read from the label's own line: the pattern's trailing `\s` can
+        # consume a newline, so match.end() may already sit on the next line
+        # ("Fix:\nClear it" would read "Clear it" as the value).
+        after = match.start(1) + len(heading) if heading else match.start(2) + len(label) + 1
+        line_end = authored.find("\n", after)
+        line_end = line_end if line_end >= 0 else len(authored)
+        words = 0 if heading else len(authored[after:line_end].split())
+        if words >= _SECTION_MIN_VALUE_WORDS:
+            counted.add(name)
+        elif words == 0:
+            # A header counts only if something sits under it before the next
+            # label: pasted ipconfig leaves adapter headers with nothing below
+            # once their dotted detail lines are stripped as output.
+            next_start = matches[i + 1].start() if i + 1 < len(matches) else len(authored)
+            if authored[line_end:next_start].strip():
+                counted.add(name)
+    if len(seen) != len(set(seen)):
+        return False
+    return len(counted) >= 2 and len(counted) * 1000 >= _SECTION_MIN_DENSITY * len(text)
 
 
 def _segment(prompts: Sequence[Prompt]) -> SegmentMetrics | None:
