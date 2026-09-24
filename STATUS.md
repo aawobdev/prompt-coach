@@ -1,22 +1,29 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-24 by Claude (Opus 5.5): paste detection known
-limits fixed -- pasted documents mostly no longer earn the sections bonus,
-and bare percentages no longer count as constraints. 439 tests.
+Last updated: 2026-09-24 by Claude (Opus 5.5): last paste-detection gap
+closed with provenance rules -- pasted terminal sessions and chat logs are
+stripped from authored text, artifact-comment relays are harness traffic.
+446 tests.
 
-## Paste detection: known limits fixed (2026-09-24)
+## Paste detection: provenance for the last gap (2026-09-24)
 
-- `has_sections` now rejects pasted documents by shape: any repeated
-  label (records/logs), 1-3 word values (form fields), headers with
-  nothing under them, and labels too sparse for the prompt's length
-  (documents). Also fixed a bug in the first cut where a header's value
-  was read from the next line. A single-dot ipconfig leader
-  (`Suffix  . :`) is now recognised as output.
-- Implicit constraints: a percentage in a bullet needs a bound next to it
-  ("below 50%", "< 30%"); a bare "72%" is a reading.
-- Real corpus (3,807 prompts, `main` vs branch): sections bonus 26 -> 11,
-  all 7 typed sectioned prompts kept; the 2 bare-percentage false
-  positives fixed; zero changes to examples, output format, paste flags or
-  nudge tips. Each rule has its own test and was mutation-checked.
+The 3 pastes still earning the sections bonus weren't a shape problem:
+they were a pasted PowerShell session (tool help text inside), a pasted
+Slack thread with the Hermes bot, and the desktop app's artifact-comment
+relay. No paste flag exists in the transcript (checked; `history.jsonl`
+has `pastedContents` but only the terminal CLI writes it, last on Sep 10).
+- `authored_text` now strips a pasted session or chat log: everything from
+  the first to the last marker (shell prompts `PS C:\...>` / `user@host:$`,
+  chat headers `Hermes  [7:30 PM]`, bare `[7:30 PM]`, WhatsApp
+  `[19:21, 17/09/2026]`, Slack `(edited)`), plus the output block after the
+  last one. Typed text before it, and a question after a blank line, stay.
+- `[Artifact comment sent to Claude]` joins the shared harness-wrapper
+  pattern, so it's dropped from the corpus and never nudged.
+- Real corpus (3,845 prompts, `main` vs branch): sections bonus 11 -> 8
+  (the 7 typed + 1 pasted handover spec); 39 more prompts flagged as bare
+  pastes, all 39 terminal sessions (22 `PS` prompt, 8 PowerShell banner, 9
+  `user@host$`). Those now get the paste tip instead of "no output format"
+  (27) or nothing (12). One false positive found and fixed before merge (a
+  typed "Can you help me fix: Hermes [9:00 PM]"). Each rule mutation-checked.
 
 ## Live state and open items (2026-09-24, fourth wrap-up)
 
@@ -42,10 +49,9 @@ and bare percentages no longer count as constraints. 439 tests.
   `.bak-manual-20260924-172259`) and `~/.claude/commands/*.md.bak-20260924-172300`.
 - **Plugin plan complete** (phases 1-4). Phase 4 = `claude plugin
   validate` in CI; the status-line offer was dropped (see below).
-- **Known limits**: pasted text whose sections carry prose values (help
-  pages, a pasted Claude reply, artifact-comment context) still reads as
-  sections: 3 of the 11 prompts that get the bonus on the real corpus.
-  Shape rules can't separate those from typed sections.
+- **Known limits**: none open for paste detection. The one remaining
+  non-typed prompt with the sections bonus is a pasted handover spec that
+  genuinely is structured, which is defensible.
 - **Other remote branches** not from this work, left alone:
   `claude/auto-prompt-improvement-7b51b7`,
   `claude/hook-prompt-interception-buttons-1a6cf7`, `claude/next-steps-a0d86d`,

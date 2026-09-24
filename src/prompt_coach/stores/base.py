@@ -37,9 +37,14 @@ _MACHINE_PATTERNS = re.compile(
 # (a background-task completion event got offered a "tighten this up"
 # rewrite). classify_origin (above) catches the orchestration task specs
 # (TASK:/HANDOFF: one-shots) on top of this.
+# The desktop app's artifact-comment relay opens with a fixed bracketed
+# header (then Artifact:/Comment thread:/<comment-anchor-context>...): an
+# app-generated payload carrying a comment, not a typed prompt. Seen live
+# 2026-09-24, where its metadata labels earned the sections bonus.
 HARNESS_WRAPPED = re.compile(
-    r"^\s*<(task-notification|command-message|command-name|system-reminder|"
+    r"^\s*(?:<(task-notification|command-message|command-name|system-reminder|"
     r"local-command-stdout|artifact-view-context|bash-(input|stdout|stderr))\b"
+    r"|\[Artifact comment sent to Claude\])"
 )
 
 

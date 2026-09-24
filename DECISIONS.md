@@ -1236,3 +1236,26 @@ sections; 3 of the 11. Telling them apart needs provenance, not shape.
 **Affects**: analysis/metrics.py, tests/test_metrics.py.
 **Decided by**: Alistair ("fix the paste detection known limits"), 2026-09-24.
 
+## 2026-09-24 - Pasted sessions and chats stripped by provenance; artifact-comment relay is harness
+
+**Trigger**: the last paste-detection gap: 3 pastes whose sections carried
+prose values. Looking at them, each had a real source: a pasted PowerShell
+session (tool help text inside), a pasted Slack thread with the Hermes bot,
+and the desktop app's `[Artifact comment sent to Claude]` relay.
+**Decision**: provenance rules, not more shape rules. (1) `authored_text`
+treats everything between the first and last session/chat marker (shell
+prompts, chat headers and timestamps, WhatsApp stamps, Slack `(edited)`)
+plus the block after the last marker as pasted. (2) The artifact-comment
+relay header joins `HARNESS_WRAPPED`: it's app-generated, like
+`<task-notification>`. Chat speaker names exclude colons so a typed
+"Can you help me fix: Hermes [9:00 PM]" stays authored.
+**Alternatives considered**: `history.jsonl`'s `pastedContents` (rejected:
+only the terminal CLI writes it and ~99% of sessions are desktop);
+transcript overlap with earlier assistant messages (rejected: the Claude
+reply was actually a Slack paste from another tool, not this transcript).
+**Result** (3,845 prompts): sections bonus 11 -> 8, only typed prompts and
+one genuinely structured pasted spec remain; 39 more bare-paste flags, all
+terminal sessions, now getting the accurate paste tip.
+**Affects**: analysis/metrics.py, stores/base.py, tests.
+**Decided by**: Alistair ("fix the remaining paste gap"), 2026-09-24.
+
