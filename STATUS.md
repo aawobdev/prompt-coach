@@ -18,19 +18,21 @@ and bare percentages no longer count as constraints. 439 tests.
   positives fixed; zero changes to examples, output format, paste flags or
   nudge tips. Each rule has its own test and was mutation-checked.
 
-## Live state and open items (2026-09-24, third wrap-up)
+## Live state and open items (2026-09-24, fourth wrap-up)
 
-- **Live on `dev`**: `main` at `5fdb70b` (PRs #2-#9 merged; plugin plan
-  phases 1-4 done). Installed CLI rebuilt from `9b0e0ad` (phase 3) with a
-  forced refresh; #7-#9 changed only build settings, CI, tests and docs, so
-  no reinstall was needed after them, and from #7 on a plain
-  `uv tool install --force .` rebuilds correctly. Plugin
-  enabled from the `/home/alistair/projects/prompt-coach` directory
-  marketplace, so hook/skill changes load in place at the next session.
-- **Verified on the installed build**: `discover` reads Claude Code
-  sessions again; a real `claude -p` session (temp copy of the cache) showed
-  the SessionStart summary and the model confirmed it wasn't in its
-  context; the paste tip and scoring fixes respond through the plugin hook.
+- **Live on `dev`**: `main` at `3412e7c` (PRs #2-#11 merged; plugin plan
+  phases 1-4 done, paste-detection known limits fixed). Installed CLI
+  rebuilt from `3412e7c` with a plain `uv tool install --force .`, which
+  rebuilt on its own thanks to #7's cache-keys (#11 didn't touch
+  pyproject.toml). Plugin enabled from the `/home/alistair/projects/
+  prompt-coach` directory marketplace, so hook/skill changes load in place
+  at the next session.
+- **Verified on the installed build**: #11's rules are live (pasted form
+  fields no longer count as sections, typed ones do; a bare "72%" is not a
+  constraint, "below 50%" is); `discover` reads Claude Code sessions again;
+  a real `claude -p` session (temp copy of the cache) showed the
+  SessionStart summary and the model confirmed it wasn't in its context;
+  the paste tip and scoring fixes respond through the plugin hook.
 - **Not yet verified**: that the SessionStart line is actually *displayed*
   in the Claude desktop app. It was checked via `claude -p` stream-json
   (terminal), not on screen in the desktop UI, where almost all sessions
