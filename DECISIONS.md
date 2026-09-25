@@ -1305,3 +1305,17 @@ score has no session context).
 **Affects**: analysis/score.py, tests/test_metrics.py.
 **Decided by**: Alistair ("yes, fix the length penalties"), 2026-09-25.
 
+## 2026-09-25 - Split a mid-line PowerShell prompt before session detection
+
+**Trigger**: the scorer pass found a pasted PowerShell session scoring 65:
+it began on the typed line ("Seems to work PS C:\...> python ..."), so
+the line-start session marker only saw the closing prompt.
+**Decision**: `authored_text` splits a line at whitespace followed by a
+`PS X:\path>` prompt, then runs the existing session stripping. Nothing
+else changes (3 of 6,545 real prompts affected).
+**Alternatives considered**: matching every session marker mid-line
+(rejected: a mid-line `user@host:...$` matches typed prose with an email
+address and a price; no real prompt needed it).
+**Affects**: analysis/metrics.py, tests/test_metrics.py.
+**Decided by**: Alistair ("fix the remaining paste gap"), 2026-09-25.
+

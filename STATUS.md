@@ -1,7 +1,18 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-25 by Claude (Opus 5.5): scorer no longer punishes
-detail -- the length-gated absence penalties are one flat
-no-success-criteria penalty. 484 tests.
+Last updated: 2026-09-25 by Claude (Opus 5.5): last paste gap closed -- a
+PowerShell prompt pasted mid-line after typed text is split off. 486 tests.
+
+## Paste detection: mid-line PowerShell prompt (2026-09-25)
+
+A PowerShell session pasted straight after typed text on the same line
+("Seems to work PS C:\Users\x> python run.py") wasn't seen: the session
+marker only matches at a line start, so the pasted tool output counted as
+typed. `authored_text` now splits the line just before a `PS X:\...>`
+prompt. Real data: 3 of 6,545 prompts change, no others -- the 65-scoring
+one is now a bare paste (25), a 3,126-char one loses a constraint bonus
+from pasted text (55 -> 30), a Hermes one keeps its score. PowerShell
+only: a mid-line `user@host:...$` would also match prose with an email
+address and a price.
 
 ## Scorer: length no longer punished (2026-09-25)
 
@@ -23,9 +34,8 @@ chars, on top of the unearned bonus, so writing more cost up to 35 points.
   follow-up from a fresh ask (see score.py docstring); no streak or nudge
   changes because of it (the streak threshold is 70, nudges don't use the
   score).
-- Known gap (paste detection, not this change): a PowerShell prompt
-  `PS C:\...>` mid-line after typed text isn't seen as a session marker,
-  so one pasted session scores 65.
+- Known gap found here (a PowerShell prompt pasted mid-line after typed
+  text) was closed the same day, see above.
 
 ## Hermes classification (2026-09-24)
 
@@ -104,8 +114,7 @@ has `pastedContents` but only the terminal CLI writes it, last on Sep 10).
   `.bak-manual-20260924-172259`) and `~/.claude/commands/*.md.bak-20260924-172300`.
 - **Plugin plan complete** (phases 1-4). Phase 4 = `claude plugin
   validate` in CI; the status-line offer was dropped (see below).
-- **Known limits**: paste detection misses a PowerShell prompt
-  `PS C:\...>` mid-line after typed text (1 real prompt, scores 65). Scorer:
+- **Known limits**: none open for paste detection. Scorer:
   short criteria-less follow-ups score 40 (no session context; fallback is
   dropping the no-criteria penalty, see DECISIONS 2026-09-25). Hermes: 7 inlined
   documents (`[Content of x]:`) are scored as typed text and left to paste
