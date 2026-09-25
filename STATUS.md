@@ -80,15 +80,18 @@ has `pastedContents` but only the terminal CLI writes it, last on Sep 10).
   (27) or nothing (12). One false positive found and fixed before merge (a
   typed "Can you help me fix: Hermes [9:00 PM]"). Each rule mutation-checked.
 
-## Live state and open items (2026-09-25, seventh wrap-up)
+## Live state and open items (2026-09-25, eighth wrap-up)
 
-- **Live on `dev`**: `main` at `5c611e4` (PRs #2-#17 merged; plugin plan
-  phases 1-4 done, paste detection complete, Hermes classification done,
-  scorer no longer punishes length). Installed CLI rebuilt from `5c611e4` with a plain `uv tool install --force .` (#7's cache-keys make
+- **Live on `dev`**: `main` at `4fca197` (PRs #2-#19 merged; plugin plan
+  phases 1-4 done, paste detection complete incl. mid-line PowerShell
+  prompts, Hermes classification done, scorer no longer punishes length).
+  Installed CLI rebuilt from `4fca197` with a plain `uv tool install --force .` (#7's cache-keys make
   that rebuild without extra flags). Plugin enabled from the `/home/alistair/projects/
   prompt-coach` directory marketplace, so hook/skill changes load in place
   at the next session.
-- **Verified on the installed build**: #17 is live (the old per-signal
+- **Verified on the installed build**: #19 is live (a PowerShell session
+  pasted mid-line leaves only the typed prefix as authored and scores 25 as
+  a bare paste, was 65; prose mentioning `PS C:\temp` is unchanged). #17 is live (the old per-signal
   absence penalties are gone; one prompt grown to 480 chars scores 40 then
   45 at every step, never falling; `prompt-coach score` on a structured
   Plex report gives 45 with the no-success-criteria penalty). #15 is live (installed
