@@ -1281,3 +1281,27 @@ label is right on real data and needs no setup).
 tests, AGENTS.md.
 **Decided by**: Alistair ("yes, fix the hermes classification"), 2026-09-24.
 
+## 2026-09-25 - Scorer: one flat no-success-criteria penalty instead of length-gated absence penalties
+
+**Trigger**: first-prompt breakdown: 200-500 char prompts scored a median
+20 against 50 for 20-80 chars. The no-format/no-example/no-constraints
+penalties only switched on above 200/100/150 chars, so adding detail cost
+up to 35 points; a test even pinned a structured Plex bug report at 15-40,
+below a vague "look at my inbox".
+**Decision**: property first: at equal signals, score never falls as a
+prompt gets longer (until the rambling cap). Replace the three penalties
+with one -10 when a 20+ char prompt has no format, example or constraint;
+the missing bonus is the rest of the signal. Sweet spot (50-300) becomes
+"enough detail" (50+ authored chars, not a bare paste). Length rules read
+authored text; too_short reads the whole prompt.
+**Alternatives considered** (all on 3,993 real prompts): absence penalties
+at every length (rejected: median 15-20 for every bucket, no spread); no
+absence penalty at all (rejected: drops the "say what done looks like"
+signal the coaching is built on; kept as the fallback if follow-up drops
+prove noisy).
+**Result**: 200-500 chars 20 -> 45, 500+ 25 -> 55; 70+ scores 15 -> 31.
+Cost: 2,188 short criteria-less asks drop 10 (mostly follow-ups; the
+score has no session context).
+**Affects**: analysis/score.py, tests/test_metrics.py.
+**Decided by**: Alistair ("yes, fix the length penalties"), 2026-09-25.
+

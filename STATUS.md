@@ -1,6 +1,31 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-24 by Claude (Opus 5.5): Hermes rows now split into
-what was typed vs what the gateway and agent wrote. 471 tests.
+Last updated: 2026-09-25 by Claude (Opus 5.5): scorer no longer punishes
+detail -- the length-gated absence penalties are one flat
+no-success-criteria penalty. 484 tests.
+
+## Scorer: length no longer punished (2026-09-25)
+
+A first-prompt breakdown showed the most detailed openers scoring worst
+(200-500 chars: median 20; 20-80 chars: median 50). Missing format,
+example and constraints were three penalties switched on at 200/100/150
+chars, on top of the unearned bonus, so writing more cost up to 35 points.
+- One flat "no success criteria" penalty (-10) now applies at any length
+  (20+ chars) when a prompt has no format, example or constraint. The
+  50-300 "sweet spot" is now "enough detail" (50+ authored chars, no upper
+  cap, not for bare pastes). Detail and rambling read authored text.
+- `score_prompt` and `score_breakdown` share one rule list (`_factors`);
+  they were two hand-synced copies.
+- Real data (3,993 prompts, 30 days), median by authored length:
+  200-500 chars 20 -> 45, 500+ 25 -> 55, 80-200 unchanged at 45, under
+  20 unchanged at 40. Scores of 70+ (good-prompt streak): 15 -> 31.
+- Trade-off: 2,188 short asks (20-99 chars) with no criteria drop 10,
+  e.g. "yes, commit it and merge to main" 50 -> 40. The score can't tell a
+  follow-up from a fresh ask (see score.py docstring); no streak or nudge
+  changes because of it (the streak threshold is 70, nudges don't use the
+  score).
+- Known gap (paste detection, not this change): a PowerShell prompt
+  `PS C:\...>` mid-line after typed text isn't seen as a session marker,
+  so one pasted session scores 65.
 
 ## Hermes classification (2026-09-24)
 
