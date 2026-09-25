@@ -70,15 +70,18 @@ has `pastedContents` but only the terminal CLI writes it, last on Sep 10).
   (27) or nothing (12). One false positive found and fixed before merge (a
   typed "Can you help me fix: Hermes [9:00 PM]"). Each rule mutation-checked.
 
-## Live state and open items (2026-09-24, sixth wrap-up)
+## Live state and open items (2026-09-25, seventh wrap-up)
 
-- **Live on `dev`**: `main` at `df7d77c` (PRs #2-#15 merged; plugin plan
-  phases 1-4 done, paste detection complete, Hermes classification done).
-  Installed CLI rebuilt from `df7d77c` with a plain `uv tool install --force .` (#7's cache-keys make
+- **Live on `dev`**: `main` at `5c611e4` (PRs #2-#17 merged; plugin plan
+  phases 1-4 done, paste detection complete, Hermes classification done,
+  scorer no longer punishes length). Installed CLI rebuilt from `5c611e4` with a plain `uv tool install --force .` (#7's cache-keys make
   that rebuild without extra flags). Plugin enabled from the `/home/alistair/projects/
   prompt-coach` directory marketplace, so hook/skill changes load in place
   at the next session.
-- **Verified on the installed build**: #15 is live (installed
+- **Verified on the installed build**: #17 is live (the old per-signal
+  absence penalties are gone; one prompt grown to 480 chars scores 40 then
+  45 at every step, never falling; `prompt-coach score` on a structured
+  Plex report gives 45 with the no-success-criteria penalty). #15 is live (installed
   `HermesStore.parser_version` is 2; the first real `stats` run re-read
   Hermes on its own: 2,827 -> 2,795 rows, 1,982 human, audit log kept at
   16 rows; the next sync was incremental). 30-day `stats`: 3,967 human
@@ -101,7 +104,10 @@ has `pastedContents` but only the terminal CLI writes it, last on Sep 10).
   `.bak-manual-20260924-172259`) and `~/.claude/commands/*.md.bak-20260924-172300`.
 - **Plugin plan complete** (phases 1-4). Phase 4 = `claude plugin
   validate` in CI; the status-line offer was dropped (see below).
-- **Known limits**: none open for paste detection. Hermes: 7 inlined
+- **Known limits**: paste detection misses a PowerShell prompt
+  `PS C:\...>` mid-line after typed text (1 real prompt, scores 65). Scorer:
+  short criteria-less follow-ups score 40 (no session context; fallback is
+  dropping the no-criteria penalty, see DECISIONS 2026-09-25). Hermes: 7 inlined
   documents (`[Content of x]:`) are scored as typed text and left to paste
   detection; 2 cli `/skill` invocations count as machine. The one remaining
   non-typed prompt with the sections bonus is a pasted handover spec that
