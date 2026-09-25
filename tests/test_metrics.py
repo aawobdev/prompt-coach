@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime
 
+import pytest
+
 from prompt_coach.analysis.metrics import (
     authored_text,
     compute_metrics,
@@ -296,8 +298,10 @@ class TestScorePrompt:
         score = score_prompt(text)
         assert score >= 55, f"Expected >= 55, got {score}"
 
-    def test_plex_rewrite_with_sections_scores_better_than_original(self):
-        """Sections help, but still lacks format/examples. Score reflects that."""
+    def test_structured_bug_report_outscores_a_vague_ask(self):
+        """Sections, no format or example. Used to be pinned at 15-40, below
+        the vague inbox ask: the length-gated absence penalties made a
+        careful report cost more than a lazy one (fixed 2026-09-25)."""
         text = (
             'Plex "Recently Added" section isn\'t updating properly.\n\n'
             "Problem: Added 3 movies yesterday. Section shows 1, and it's from 4 days ago. "
@@ -306,9 +310,8 @@ class TestScorePrompt:
             "Logs: checked PMS logs, no errors around scanning.\n\n"
             "What's the next step to diagnose?"
         )
-        score = score_prompt(text)
-        # Has structure (sections) but no output format or examples
-        assert 15 <= score <= 40, f"Expected 15-40, got {score}"
+        vague = score_prompt("Can you look at my inbox and figure out what to do")
+        assert score_prompt(text) > vague
 
     def test_kanban_spec_scores_high(self):
         text = (
@@ -328,15 +331,16 @@ class TestScorePrompt:
         alone ("now"/"check"/"try"/"and"/...) fired on long, fully-formed
         prompts, not just short conversational continuations. This text
         starts with "Now" and has no output format, example, or explicit
-        constraint -- it must still take the full penalty."""
+        constraint -- it must still take the no-success-criteria penalty."""
         text = (
             "Now go through the whole billing export from last quarter and figure out "
             "which customers churned, why they left based on the notes field, and whether "
             "we could have caught it earlier by looking at usage trends before they "
             "cancelled their subscription entirely."
         )
-        score = score_prompt(text)
-        assert score < 30, f"Expected a heavily penalized score, got {score}"
+        result = score_breakdown(text)
+        assert NO_CRITERIA in [p[0] for p in result["penalties"]]
+        assert result["score"] < 50
 
     def test_breakdown_structure(self):
         text = (
@@ -352,6 +356,89 @@ class TestScorePrompt:
         bonus_names = [b[0] for b in result["bonuses"]]
         assert "Output format specified" in bonus_names
         assert "Constraints/boundaries set" in bonus_names
+
+
+NO_CRITERIA = "No success criteria (format, example or constraint)"
+
+
+class TestLengthRules:
+    """Each case isolates one length rule; see score._factors (2026-09-25)."""
+
+    @staticmethod
+    def names(text):
+        b = score_breakdown(text)
+        return [x[0] for x in b["bonuses"]] + [x[0] for x in b["penalties"]]
+
+    def test_more_detail_never_lowers_the_score(self):
+        # Same signals throughout; only neutral detail is added. Before the
+        # fix the score fell 50 -> 45 -> 35 -> 25 as the report grew.
+        for opener in (
+            "Fix the login bug in the auth service.",
+            "Fix the login bug in the auth service. Do not change the API.",
+        ):
+            text, scores = opener, []
+            while len(text) < 480:
+                scores.append(score_prompt(text))
+                text += " The session token expires early after a refresh."
+            assert scores == sorted(scores), scores
+
+    def test_no_criteria_penalty_at_any_length(self):
+        assert NO_CRITERIA in self.names("look at my inbox please")
+        assert NO_CRITERIA in self.names("look at my inbox please. " * 12)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Summarise the inbox. Return a table: sender | subject | action",
+            "Summarise the inbox, for example: 'Bank - statement ready - file it'",
+            "Summarise the inbox. Only emails from this week.",
+        ],
+    )
+    def test_any_one_criterion_lifts_the_penalty(self, text):
+        assert NO_CRITERIA not in self.names(text)
+
+    def test_short_prompt_gets_too_short_not_both(self):
+        assert self.names("fix it") == ["Too short (< 20 chars)"]
+
+    def test_detail_bonus_has_no_upper_cap(self):
+        assert "Enough detail (50+ chars)" in self.names("Describe the fault in detail. " * 12)
+
+    def test_pasted_text_is_not_detail(self):
+        assert "Enough detail (50+ chars)" not in self.names(TRACEBACK + "\nwhy?")
+
+    def test_bare_paste_leftovers_are_not_detail(self):
+        # A PowerShell banner survives authored_text as ~65 chars (real data).
+        banner = "PowerShell 7.6.5 Loaded BWS_ACCESS_TOKEN -> $env:BWS_ACCESS_TOKEN\n"
+        text = banner + TRACEBACK * 3
+        assert len(authored_text(text)) >= 50
+        assert is_bare_paste(text)
+        assert "Enough detail (50+ chars)" not in self.names(text)
+
+    def test_pasted_text_is_not_rambling(self):
+        text = "Why does this fail after the upgrade?\n" + TRACEBACK * 4
+        assert len(text) > 500
+        assert not any(n.startswith("Rambling") for n in self.names(text))
+
+    def test_typed_rambling_still_penalised(self):
+        assert any(n.startswith("Rambling") for n in self.names("I think maybe it broke. " * 25))
+
+    def test_too_short_reads_the_whole_prompt(self):
+        assert "Too short (< 20 chars)" not in self.names(TRACEBACK + "\nwhy?")
+
+    def test_score_is_the_clamped_sum_of_its_breakdown(self):
+        every_bonus = (
+            "Task: tidy the docker config.\n"
+            "Constraints: only edit compose files, do not restart anything.\n"
+            "Example: 'plex - port 32400 - ok'\n"
+            "Return a table: service | port | status"
+        )
+        b = score_breakdown(every_bonus)
+        assert 50 + sum(v for _, v in b["bonuses"] + b["penalties"]) > 100
+        assert b["score"] == 100
+        for text in ("fix it", TRACEBACK, "Summarise the inbox. Only emails from this week."):
+            b = score_breakdown(text)
+            total = 50 + sum(v for _, v in b["bonuses"] + b["penalties"])
+            assert b["score"] == max(0, min(100, total))
 
 
 TRACEBACK = (
