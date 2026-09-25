@@ -103,6 +103,13 @@ _SESSION_MARKER = re.compile(
     )""",
     re.VERBOSE,
 )
+# A PowerShell prompt pasted straight after typed text on the same line
+# ("Seems to work PS C:\Users\x> python run.py"): the paste starts
+# mid-line, so _SESSION_MARKER's line-start match never sees it. Split the
+# line there first (3 real prompts, 2026-09-25). PowerShell only: a
+# mid-line `user@host:...$` would also match typed prose with an email
+# address and a price in it.
+_MIDLINE_PS = re.compile(r"[ \t]+(?=PS [A-Za-z]:\\[^>\n]*>(?:\s|$))")
 # "Label: value" -- 5+ of these in a row is a key-value dump (systemd
 # status, motd, form fields pasted from a document), not authored
 # sections. 5, not fewer, so a compact typed spec ("Goal: / Context: /
@@ -204,7 +211,7 @@ def authored_text(text: str) -> str:
     file or `systemctl status` used to score as "has constraints" or "has
     sections" purely from its own formatting (2026-09-24). Cached because
     each signal calls it for the same prompt."""
-    lines = _FENCE.sub("\n", text).splitlines()
+    lines = _MIDLINE_PS.sub("\n", _FENCE.sub("\n", text)).splitlines()
     keep = [not _OUTPUT_LINE.match(line) for line in lines]
     # A pasted terminal session or chat log: everything from the first
     # marker to the last, plus the block straight after the last one (its

@@ -562,6 +562,28 @@ class TestPastedSessionsAndChats:
         text = "Rough numbers below.\n[19:21, 17/09/2026] Alistair: Design: 3 days\nBuild: 5 days"
         assert authored_text(text).strip() == "Rough numbers below."
 
+    def test_powershell_prompt_pasted_mid_line_after_typed_text(self):
+        # Real shape (2026-09-25): the paste starts on the typed line, so the
+        # line-start marker only saw the closing prompt and the tool's help
+        # text stayed "authored" (the prompt scored 65 on an example bonus).
+        text = (
+            "Seems to work, I switched twice PS C:\\Users\\x\\Downloads> python live.py\n"
+            "Usage: live.py [options]\n"
+            "Options: for example --verbose, only use this when debugging\n"
+            "PS C:\\Users\\x\\Downloads>"
+        )
+        assert authored_text(text).strip() == "Seems to work, I switched twice"
+        assert not has_example(text)
+        assert not has_constraints(text)
+
+    def test_powershell_path_in_typed_prose_stays_authored(self):
+        # No ">" after the path: a mention, not a prompt.
+        text = "Run it from PS C:\\temp and tell me what it prints"
+        assert authored_text(text) == text
+        # "PS" must start a word: the tail of GPS isn't a prompt.
+        text = "Open the GPS C:\\maps> folder and list what is in it"
+        assert authored_text(text) == text
+
     def test_typed_text_mentioning_a_speaker_and_time_stays_authored(self):
         # A chat speaker name has no colon; a typed ask before it does.
         text = "Can you help me fix: Hermes  [9:00 PM]"
