@@ -1375,6 +1375,10 @@ went from 3/4 to 4/4 correct; 5 project prompts stayed grounded. One
 fair reading and not a regression.
 **Known gap**: with auto_rewrite on, every triggered prompt goes to
 OpenRouter, including personal ones typed in any folder. There's no
-per-folder opt-out yet.
+per-folder opt-out yet. Mitigated: Alistair's OpenRouter account enforces
+zero data retention (ZDR). Verified 2026-09-27 with the dedicated key:
+forcing a non-ZDR provider (DeepSeek's own API, Alibaba) is refused with
+"ZDR violation (account settings)". OpenRouter's own prompt-logging setting
+isn't visible via the API and is unverified.
 **Affects**: config.py, nudge.py, cli.py.
 **Decided by**: Alistair ("build path 1", "switch it on globally"), 2026-09-27.
