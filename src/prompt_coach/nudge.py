@@ -317,9 +317,55 @@ def _block_reason(rewritten: str) -> str:
     return (
         "prompt-coach held this prompt back -- here's a tighter rewrite:\n\n"
         f"{rewritten}\n\n"
-        f"Run {ACCEPT_COMMAND} to send the rewrite, or {ORIGINAL_COMMAND} to send "
-        "your prompt as-is."
+        "Reply y to send the rewrite, n to send your original "
+        f"(or run {ACCEPT_COMMAND} / {ORIGINAL_COMMAND})."
     )
+
+
+# One-letter answers to a block (2026-09-27): hooks can't render a button or
+# replace the prompt text, so `y`/`n` go through as-is and the chosen text
+# rides along as additionalContext -- the same channel auto mode uses.
+_REPLY_WANTS = {"y": "rewritten", "n": "original"}
+_REPLY_HEADINGS = {
+    "rewritten": "Sent (prompt-coach rewrite):",
+    "original": "Sent (your original prompt):",
+}
+
+
+def _reply_response(text: str, want: str) -> dict:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": (
+                "prompt-coach: the user's one-letter message is their answer to "
+                "prompt-coach's offer, not a request in itself. Their actual "
+                "request is the text below -- respond to it directly. They can't "
+                "see that text in the chat, so begin your reply with a "
+                f"blockquote showing it verbatim, headed `**{_REPLY_HEADINGS[want]}**`, "
+                f"then answer it below.\n\n{text}"
+            ),
+        }
+    }
+
+
+def _answer_pending(cache_dir: Path, session_id: str, prompt: str) -> dict | None:
+    """Handle a prompt sent while a block's rewrite is pending: `y`/`n`
+    deliver one side of it; any other non-slash prompt drops it, so a later
+    `y` answering one of Claude's own questions can't resurrect a stale
+    offer. Slash commands leave it alone -- /prompt-coach:accept consumes it
+    itself. Returns None when the prompt should be handled normally."""
+    data = _load_pending_state(cache_dir)
+    if session_id not in data["pending"]:
+        return None
+    want = _REPLY_WANTS.get(prompt.strip().lower())
+    if want is None:
+        if not prompt.lstrip().startswith("/"):
+            del data["pending"][session_id]
+            _write_pending_state(cache_dir, data)
+        return None
+    entry = data["pending"].pop(session_id)
+    _write_pending_state(cache_dir, data)
+    return _reply_response(entry.get(want, ""), want)
 
 
 # Auto mode's whole trick: UserPromptSubmit can't replace the prompt text
@@ -555,6 +601,10 @@ def build_response(payload: dict, cfg: Config) -> dict:
     prompt = payload.get("prompt", "")
     if not prompt:
         return {}
+
+    answered = _answer_pending(cfg.cache_dir, session_id, prompt)
+    if answered is not None:
+        return answered
 
     if _pop_skip_next(cfg.cache_dir, session_id):
         # This is the resend triggered by /prompt-coach:accept or :original

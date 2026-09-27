@@ -343,6 +343,92 @@ class TestPendingRewrite:
         assert resp["decision"] == "block"  # back to normal always-mode blocking
 
 
+class TestYesNoReply:
+    """Hooks can't render a button (hooks docs, checked 2026-09-27), so the
+    next-cheapest accept is a one-letter reply: `y` sends the rewrite, `n`
+    the original, both delivered as additionalContext (the hook can't
+    replace the prompt text). Any other prompt drops the pending rewrite,
+    so a later `y` answering one of Claude's own questions can't resurrect
+    a stale rewrite."""
+
+    def _block(self, tmp_path, monkeypatch, mode="always"):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path, mode=mode)
+        prompt = SHORT_ORDINARY if mode == "always" else LONG_WEAK  # coach needs a weak one
+        resp = build_response({"prompt": prompt, "session_id": "s1"}, cfg)
+        assert resp["decision"] == "block"
+        return cfg
+
+    @staticmethod
+    def _context(resp):
+        return resp["hookSpecificOutput"]["additionalContext"]
+
+    def test_block_reason_offers_y_and_n(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        resp = build_response(
+            {"prompt": SHORT_ORDINARY, "session_id": "s1"}, make_cfg(tmp_path, mode="always")
+        )
+        assert "Reply y to send the rewrite, n to send your original" in resp["reason"]
+
+    def test_y_injects_the_rewrite_and_lets_the_prompt_through(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch)
+        resp = build_response({"prompt": "y", "session_id": "s1"}, cfg)
+        assert "decision" not in resp
+        ctx = self._context(resp)
+        assert "REWRITTEN" in ctx
+        assert "**Sent (prompt-coach rewrite):**" in ctx
+        assert SHORT_ORDINARY not in ctx
+
+    def test_n_injects_the_original(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch)
+        ctx = self._context(build_response({"prompt": "n", "session_id": "s1"}, cfg))
+        assert SHORT_ORDINARY in ctx
+        assert "REWRITTEN" not in ctx
+        assert "**Sent (your original prompt):**" in ctx
+
+    def test_reply_is_case_and_whitespace_insensitive(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch)
+        ctx = self._context(build_response({"prompt": "  Y \n", "session_id": "s1"}, cfg))
+        assert "REWRITTEN" in ctx
+
+    def test_reply_is_one_shot_and_sets_no_skip_flag(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch)
+        build_response({"prompt": "y", "session_id": "s1"}, cfg)
+        assert consume_pending_rewrite(cfg.cache_dir, "s1", "rewritten") is None
+        # No resend follows a y/n reply, so the next real prompt is judged normally.
+        resp = build_response({"prompt": SHORT_ORDINARY, "session_id": "s1"}, cfg)
+        assert resp["decision"] == "block"
+
+    def test_other_prompt_drops_the_pending_rewrite(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch, mode="coach")  # coach: gate spent, won't reblock
+        build_response({"prompt": "actually, never mind", "session_id": "s1"}, cfg)
+        resp = build_response({"prompt": "y", "session_id": "s1"}, cfg)
+        assert resp == {}  # a plain y now, e.g. answering Claude -- nothing injected
+
+    def test_slash_command_does_not_drop_the_pending_rewrite(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch, mode="coach")
+        build_response({"prompt": "/prompt-coach:accept", "session_id": "s1"}, cfg)
+        assert consume_pending_rewrite(cfg.cache_dir, "s1", "rewritten") == "REWRITTEN"
+
+    def test_y_with_nothing_pending_is_an_ordinary_prompt(self, tmp_path):
+        assert build_response({"prompt": "y", "session_id": "s1"}, make_cfg(tmp_path)) == {}
+
+    def test_y_is_honoured_under_a_different_mode(self, tmp_path, monkeypatch):
+        """Mode resolution is per-cwd; a pending offer the user saw must still
+        work if their answer resolves to a different (non-off) mode."""
+        self._block(tmp_path, monkeypatch)  # blocked under "always"
+        off = make_cfg(tmp_path, mode="coach")
+        assert "REWRITTEN" in self._context(
+            build_response({"prompt": "y", "session_id": "s1"}, off)
+        )
+
+
 TASK_NOTIFICATION = (
     "<task-notification>\n<task-id>abc123</task-id>\n<status>completed</status>\n"
     "<summary>Background command completed (exit code 0)</summary>\n"
