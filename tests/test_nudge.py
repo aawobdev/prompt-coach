@@ -990,3 +990,14 @@ class TestSessionStartDispatch:
         build_response({"hook_event_name": "SessionStart", "source": "startup"}, cfg)
         assert len(get_score_history(cfg.cache_dir)) == 2
         assert not (cfg.cache_dir / "cache.db").exists()
+
+
+def test_rewrite_prompt_keeps_general_questions_general():
+    """Found live 2026-09-27: with only a working directory as context, the
+    rewriter turned "tell me everything about green" into "what does green
+    refer to in this project?" and sent Claude searching an empty folder.
+    Old-vs-new over real prompts is in DECISIONS.md; this pins the guard."""
+    from prompt_coach.nudge import _REWRITE_SYSTEM
+
+    assert "general-knowledge or everyday question" in _REWRITE_SYSTEM
+    assert "ignore the session context entirely" in _REWRITE_SYSTEM
