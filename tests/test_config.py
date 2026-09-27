@@ -20,6 +20,7 @@ def clean_env(monkeypatch):
         "PROMPT_COACH_API_KEY",
         "PROMPT_COACH_API_KEY_CMD",
         "PROMPT_COACH_REASONING",
+        "PROMPT_COACH_NUDGE_AUTO_REWRITE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -180,3 +181,20 @@ def test_write_config_omits_unset_api_key_cmd_and_reasoning(clean_env, tmp_path)
     text = out.read_text()
     assert "api_key_cmd" not in text
     assert "reasoning" not in text
+
+
+def test_auto_rewrite_defaults_off_and_reads_toml_and_env(clean_env, monkeypatch, tmp_path):
+    assert load_config(tmp_path / "nope.toml").nudge.auto_rewrite is False
+    path = tmp_path / "config.toml"
+    path.write_text("[nudge]\nauto_rewrite = true\n")
+    assert load_config(path).nudge.auto_rewrite is True
+    monkeypatch.setenv("PROMPT_COACH_NUDGE_AUTO_REWRITE", "false")
+    assert load_config(path).nudge.auto_rewrite is False
+
+
+def test_write_config_round_trips_auto_rewrite(clean_env, tmp_path):
+    src = tmp_path / "config.toml"
+    src.write_text("[nudge]\nauto_rewrite = true\n")
+    out = tmp_path / "written.toml"
+    write_config(load_config(src), out)
+    assert load_config(out).nudge.auto_rewrite is True

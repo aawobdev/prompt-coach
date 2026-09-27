@@ -19,7 +19,7 @@ from prompt_coach.nudge import (
 _UNREACHABLE = "http://127.0.0.1:9"  # nothing listens here -- deterministic "LLM down"
 
 
-def make_cfg(tmp_path, mode="coach", base_url=_UNREACHABLE, dir_overrides=None):
+def make_cfg(tmp_path, mode="coach", base_url=_UNREACHABLE, dir_overrides=None, auto_rewrite=False):
     return Config(
         llm=LLMConfig(
             base_url=base_url, model="test-model", api_key="x", allow_remote=False, timeout=5.0
@@ -30,7 +30,12 @@ def make_cfg(tmp_path, mode="coach", base_url=_UNREACHABLE, dir_overrides=None):
             copilot_dir=None,
             codex_dir=None,
         ),
-        nudge=NudgeConfig(mode=mode, llm_timeout=2.0, dir_overrides=dir_overrides or {}),
+        nudge=NudgeConfig(
+            mode=mode,
+            llm_timeout=2.0,
+            dir_overrides=dir_overrides or {},
+            auto_rewrite=auto_rewrite,
+        ),
         model_fit=ModelFitConfig(mode="descriptive"),
         cache_dir=tmp_path / "cache",
     )
@@ -739,6 +744,88 @@ class TestHermesPreLlmCall:
         cfg = make_cfg(tmp_path, mode="coach")
         payload = {"hook_event_name": "pre_llm_call", "session_id": "h4", "extra": {}}
         assert build_response(payload, cfg) == {}
+
+
+class TestAutoRewrite:
+    """Path 1 (2026-09-27): auto mode with `auto_rewrite = true` has the
+    rewrite model improve a weak prompt and delivers it straight to the
+    session model as additionalContext -- no block, no reply needed. Off by
+    default, and any rewrite failure falls back to today's self-refine
+    directive, so auto mode never gets worse than it was."""
+
+    def _llm(self, monkeypatch, rewrite="REWRITTEN"):
+        seen = {}
+
+        def fake_rewrite(prompt, llm, context=None):
+            seen["context"] = context
+            return rewrite
+
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr("prompt_coach.nudge.rewrite_prompt", fake_rewrite)
+        return seen
+
+    def _no_llm_allowed(self, monkeypatch):
+        def boom(cfg):
+            raise AssertionError("LLM must not be called here")
+
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", boom)
+
+    @staticmethod
+    def _ctx(resp):
+        return resp["hookSpecificOutput"]["additionalContext"]
+
+    def test_weak_prompt_gets_the_rewrite_injected_without_blocking(self, tmp_path, monkeypatch):
+        self._llm(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert "decision" not in resp
+        assert "REWRITTEN" in self._ctx(resp)
+        assert "**Sent (prompt-coach rewrite):**" in self._ctx(resp)
+        assert "test-model" in resp["systemMessage"]
+
+    def test_rewrite_is_grounded_in_session_context(self, tmp_path, monkeypatch):
+        seen = self._llm(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        build_response({"prompt": LONG_WEAK, "session_id": "s1", "cwd": str(tmp_path)}, cfg)
+        assert seen["context"] and str(tmp_path) in seen["context"]
+
+    def test_off_by_default_keeps_the_llm_free_directive(self, tmp_path, monkeypatch):
+        self._no_llm_allowed(monkeypatch)
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, make_cfg(tmp_path, "auto"))
+        assert "prompt-coach auto-improve" in self._ctx(resp)
+
+    def test_unreachable_llm_falls_back_to_self_refine(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)  # _UNREACHABLE endpoint
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert "prompt-coach auto-improve" in self._ctx(resp)
+
+    def test_failed_rewrite_falls_back_to_self_refine(self, tmp_path, monkeypatch):
+        self._llm(monkeypatch, rewrite=None)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert "prompt-coach auto-improve" in self._ctx(resp)
+
+    def test_good_prompt_passes_without_an_llm_call(self, tmp_path, monkeypatch):
+        self._no_llm_allowed(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        assert build_response({"prompt": SHORT_ORDINARY, "session_id": "s1"}, cfg) == {}
+
+    def test_paste_is_never_rewritten(self, tmp_path, monkeypatch):
+        self._no_llm_allowed(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        resp = build_response({"prompt": PASTE, "session_id": "s1"}, cfg)
+        assert "prompt-coach auto-improve" in self._ctx(resp)
+
+    def test_audit_records_the_rewrite(self, tmp_path, monkeypatch):
+        self._llm(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        from prompt_coach.cache import CacheDB
+
+        cache = CacheDB(cfg.cache_dir / "cache.db")
+        events = cache.get_audit_events(limit=10)
+        cache.close()
+        assert events[0]["refined_prompt"] == "REWRITTEN"
 
 
 class TestAuditIntegration:

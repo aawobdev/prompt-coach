@@ -111,6 +111,11 @@ class NudgeConfig:
     # no clean flat env-var form. nudge.py resolves the longest matching
     # path prefix from the hook's cwd, falling back to `mode` above.
     dir_overrides: dict[str, str] = field(default_factory=dict)
+    # Auto mode only (2026-09-27): when true, a triggered prompt is rewritten
+    # by the [llm] model and the rewrite goes straight to the session model
+    # (no block). False keeps the LLM-free self-refine directive. Any rewrite
+    # failure falls back to that directive.
+    auto_rewrite: bool = False
 
 
 # "off": model-fit analysis never runs.
@@ -215,6 +220,9 @@ def load_config(path: Path | None = None) -> Config:
     if nudge_mode not in NUDGE_MODES:
         raise ValueError(f"nudge mode {nudge_mode!r} must be one of {NUDGE_MODES}")
     nudge_llm_timeout = float(env("NUDGE_LLM_TIMEOUT", str(nudge_cfg.get("llm_timeout", 20.0))))
+    auto_rewrite = env(
+        "NUDGE_AUTO_REWRITE", "true" if nudge_cfg.get("auto_rewrite", False) else "false"
+    ).lower() in ("1", "true", "yes")
 
     dir_overrides_raw = nudge_cfg.get("dir_overrides", {})
     if not isinstance(dir_overrides_raw, dict):
@@ -250,7 +258,10 @@ def load_config(path: Path | None = None) -> Config:
             enabled=enabled_stores,
         ),
         nudge=NudgeConfig(
-            mode=nudge_mode, llm_timeout=nudge_llm_timeout, dir_overrides=dir_overrides
+            mode=nudge_mode,
+            llm_timeout=nudge_llm_timeout,
+            dir_overrides=dir_overrides,
+            auto_rewrite=auto_rewrite,
         ),
         model_fit=ModelFitConfig(mode=model_fit_mode),
         cache_dir=cache_dir,
@@ -303,6 +314,8 @@ def write_config(cfg: Config, path: Path) -> None:
         f"mode = {_toml_str(cfg.nudge.mode)}",
         f"llm_timeout = {cfg.nudge.llm_timeout}",
     ]
+    if cfg.nudge.auto_rewrite:
+        lines.append("auto_rewrite = true")
     if cfg.nudge.dir_overrides:
         lines += ["", "[nudge.dir_overrides]"]
         lines += [

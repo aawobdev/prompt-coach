@@ -460,7 +460,6 @@ def _setup_wizard():
         APIKeyCommandFailed,
         Config,
         ModelFitConfig,
-        NudgeConfig,
         StoresConfig,
         config_file_path,
         write_config,
@@ -539,9 +538,7 @@ def _setup_wizard():
             codex_dir=cfg.stores.codex_dir,
             enabled=frozenset(enabled),
         ),
-        nudge=NudgeConfig(
-            mode=nudge_mode, llm_timeout=cfg.nudge.llm_timeout, dir_overrides=dir_overrides
-        ),
+        nudge=dataclasses.replace(cfg.nudge, mode=nudge_mode, dir_overrides=dir_overrides),
         model_fit=ModelFitConfig(mode=model_fit_mode),
         cache_dir=cfg.cache_dir,
     )

@@ -407,6 +407,27 @@ _AUTO_RESPONSE = {
 }
 
 
+def _auto_rewrite_response(rewritten: str, model: str) -> dict:
+    """Path 1: the rewrite rides along as additionalContext (the hook can't
+    replace the prompt text), and the reply opens by quoting it -- the user
+    otherwise never sees it."""
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": (
+                "prompt-coach auto-improve: the user's prompt tripped a weak-prompt "
+                "trigger and has been rewritten. Treat the rewritten request below "
+                "as what the user is asking; use their original wording only to "
+                "resolve ambiguity. They can't see the rewrite in the chat, so "
+                "begin your reply with a blockquote showing it verbatim, headed "
+                f"`**{_REPLY_HEADINGS['rewritten']}**`, then answer it below."
+                f"\n\n{rewritten}"
+            ),
+        },
+        "systemMessage": f"prompt-coach: rewrote this prompt with {model} (auto mode).",
+    }
+
+
 def _pending_path(cache_dir: Path) -> Path:
     return cache_dir / "nudge_pending.json"
 
@@ -618,14 +639,20 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if mode == "auto":
         # Same calibrated triggers as coach (and _tip_for already screens
         # out machine prompts), but no once-per-session gate: auto never
-        # interrupts, so there's no nag cost to ration. No LLM call either
-        # (see _AUTO_RESPONSE), so this path is near-free and never needs
-        # a degraded fallback.
+        # interrupts, so there's no nag cost to ration. By default no LLM
+        # call either (see _AUTO_RESPONSE); with auto_rewrite the [llm]
+        # model rewrites it first, falling back to that directive.
         tip = _tip_for(prompt)
-        if tip is not None:
-            _record_audit(cfg, payload, prompt, trigger=tip)
         record_prompt(cfg.cache_dir, prompt, was_nudged=tip is not None)
-        return _AUTO_RESPONSE if tip is not None else {}
+        if tip is None:
+            return {}
+        rewritten = None
+        if cfg.nudge.auto_rewrite and tip != _TIP_PASTE:  # never rewrite a paste
+            llm = _make_llm(cfg)
+            if llm is not None:
+                rewritten = rewrite_prompt(prompt, llm, context=gather_context(payload))
+        _record_audit(cfg, payload, prompt, trigger=tip, refined=rewritten)
+        return _auto_rewrite_response(rewritten, cfg.llm.model) if rewritten else _AUTO_RESPONSE
 
     if mode == "hint":
         # Hint mode: let the prompt through untouched. The Stop hook
