@@ -326,6 +326,9 @@ def _block_reason(rewritten: str) -> str:
 # replace the prompt text, so `y`/`n` go through as-is and the chosen text
 # rides along as additionalContext -- the same channel auto mode uses.
 _REPLY_WANTS = {"y": "rewritten", "n": "original"}
+# With nothing pending these are answers to Claude's own questions; always
+# mode used to block and "rewrite" them into nonsense (found live 2026-09-27).
+_BARE_CONFIRMATIONS = frozenset({"y", "n", "yes", "no", "ok", "okay"})
 _REPLY_HEADINGS = {
     "rewritten": "Sent (prompt-coach rewrite):",
     "original": "Sent (your original prompt):",
@@ -634,6 +637,8 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if mode == "always":
         if _is_machine_prompt(prompt):
             return {}  # harness traffic, not a prompt anyone typed
+        if prompt.strip().lower() in _BARE_CONFIRMATIONS:
+            return {}  # answering Claude, not a request -- nothing to rewrite
         if is_bare_paste(prompt):
             # A rewrite is kept "about as long as a well-written ask" (see
             # _REWRITE_SYSTEM), so rewriting a mostly-pasted prompt risks

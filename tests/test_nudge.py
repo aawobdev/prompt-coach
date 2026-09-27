@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from prompt_coach.config import Config, LLMConfig, ModelFitConfig, NudgeConfig, StoresConfig
 from prompt_coach.nudge import (
     _resolve_mode,
@@ -418,6 +420,18 @@ class TestYesNoReply:
 
     def test_y_with_nothing_pending_is_an_ordinary_prompt(self, tmp_path):
         assert build_response({"prompt": "y", "session_id": "s1"}, make_cfg(tmp_path)) == {}
+
+    @pytest.mark.parametrize("reply", ["y", "n", "yes", "No", "ok"])
+    def test_always_mode_never_rewrites_a_bare_confirmation(self, tmp_path, monkeypatch, reply):
+        """Found live 2026-09-27: with nothing pending, always mode blocked a
+        plain `y` (answering one of Claude's questions) and 'rewrote' it into
+        nonsense."""
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path, mode="always")
+        assert build_response({"prompt": reply, "session_id": "s1"}, cfg) == {}
 
     def test_y_is_honoured_under_a_different_mode(self, tmp_path, monkeypatch):
         """Mode resolution is per-cwd; a pending offer the user saw must still
