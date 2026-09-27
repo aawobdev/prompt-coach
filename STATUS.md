@@ -1,6 +1,30 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-25 by Claude (Opus 5.5): last paste gap closed -- a
-PowerShell prompt pasted mid-line after typed text is split off. 486 tests.
+Last updated: 2026-09-27 by Claude (Opus 5.5): cloud rewrite model
+(DeepSeek via OpenRouter), y/n replies to a block, auto_rewrite. All paths
+tested live in the desktop app. 526 tests.
+
+## Cloud rewrites, y/n replies, auto_rewrite (2026-09-27)
+
+Local Ollama is usually off, so coach/always rewrites had been silently
+falling back to tips. Now (details in DECISIONS.md, three 2026-09-27 entries):
+- `[llm] api_key_cmd` (key from bws, never on disk) and `reasoning = false`
+  (DeepSeek v4 flash otherwise returns nothing). Live: `deepseek/deepseek-v4.1-flash`
+  on a dedicated $5-capped OpenRouter key; the account enforces ZDR (verified).
+- Block offers "Reply y ... n ..."; every path makes Claude quote what was
+  sent. Always mode no longer rewrites a bare `y`/`ok`.
+- `[nudge] auto_rewrite`: auto mode sends the rewrite straight through
+  (1.5 s), falling back to self-refine. The rewriter now keeps general
+  questions general.
+
+Live desktop tests (sessions in ~/pc-test): accept skill, `y`, `n`, and
+auto_rewrite all pass with real rewrites. Hook times 1.5-3 s.
+
+Open:
+- After merge: `uv tool install --force --reinstall .` from main (the CLI
+  is currently installed from this branch) and refresh the plugin cache
+  (`hooks.json` there predates the SessionStart hook).
+- No per-folder opt-out from cloud rewrites (low priority given ZDR).
+- DeepSeek sometimes narrows "everything" to "a brief overview"; watch it.
 
 ## Paste detection: mid-line PowerShell prompt (2026-09-25)
 

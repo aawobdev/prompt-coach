@@ -135,3 +135,30 @@ class TestTemplates:
         assert tpl.PATTERN_MAP_VERSION.startswith("pattern-map.")
         assert tpl.PATTERN_REDUCE_VERSION.startswith("pattern-reduce.")
         assert tpl.QUERY_ANSWER_VERSION.startswith("query-answer.")
+
+
+class TestReasoning:
+    """DeepSeek v4 flash spent its whole 800-token budget reasoning and
+    returned no content (measured 2026-09-27), so reasoning must be
+    switchable off per endpoint -- and never sent when unset (Ollama)."""
+
+    def _sent_body(self, route):
+        import json
+
+        return json.loads(route.calls.last.request.content)
+
+    @respx.mock
+    def test_reasoning_false_sends_disabled(self):
+        route = respx.post(f"{BASE}/chat/completions").mock(
+            return_value=httpx.Response(200, json=completion('{"a": 1}'))
+        )
+        LocalLLM(BASE, "m", reasoning=False).complete_json("s", "u")
+        assert self._sent_body(route)["reasoning"] == {"enabled": False}
+
+    @respx.mock
+    def test_reasoning_unset_sends_nothing(self):
+        route = respx.post(f"{BASE}/chat/completions").mock(
+            return_value=httpx.Response(200, json=completion('{"a": 1}'))
+        )
+        LocalLLM(BASE, "m").complete_json("s", "u")
+        assert "reasoning" not in self._sent_body(route)

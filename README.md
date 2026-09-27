@@ -42,7 +42,7 @@ uv run prompt-coach import chatgpt-export.zip   # ChatGPT official data export
 | `dash` | Terminal dashboard: volume sparklines, segments, scorecard, project-doc quality (`--plain` for non-TTY, `--no-sync` to skip the store sync and render from cache as-is) |
 | `stats` | Quick metrics table, no LLM needed |
 | `query` | Natural-language question over your prompt history, with citations |
-| `nudge` | Hook target for Claude Code (`UserPromptSubmit` + `Stop`) and Hermes (`pre_llm_call`). On Claude Code, default `coach` mode blocks weak prompts with an LLM-rewritten suggestion (degrades to a one-line tip if the LLM is unreachable), once per session; `always` mode blocks and rewrites every prompt; `off` disables it. On Hermes, `pre_llm_call` can only inject context, not block, so it's always tip-only regardless of mode (`always` collapses to `coach`'s behavior there). Set via `PROMPT_COACH_NUDGE_MODE` or `[nudge] mode` in config.toml. Not meant to be run by hand. |
+| `nudge` | Hook target for Claude Code (`UserPromptSubmit` + `Stop`) and Hermes (`pre_llm_call`). On Claude Code, default `coach` mode blocks weak prompts with an LLM-rewritten suggestion (degrades to a one-line tip if the LLM is unreachable), once per session; `always` mode blocks and rewrites every prompt (a bare `y`/`n`/`ok` answer is let through); `auto` never blocks: it asks the session model to refine the prompt itself, or with `[nudge] auto_rewrite = true` sends the LLM's rewrite straight through (falling back to self-refine); `off` disables it. After a block, reply `y` to send the rewrite or `n` to send your original. On Hermes, `pre_llm_call` can only inject context, not block, so it's always tip-only regardless of mode (`always` collapses to `coach`'s behavior there). Set via `PROMPT_COACH_NUDGE_MODE` or `[nudge] mode` in config.toml. Not meant to be run by hand. |
 | `import` | Import a ChatGPT export (ZIP/JSON) or simple JSON sessions; format auto-detected |
 | `nudge-consume` | Internal target for the `/prompt-coach:accept` / `/prompt-coach:original` plugin skills below -- pops the pending rewrite for a session and prints one side of it. Not meant to be run by hand. |
 | `doctor` | Read-only report: is the `claude` CLI on PATH, is the plugin installed, are the legacy hooks/commands it replaces still present (`--json` for scripting). |
@@ -70,18 +70,28 @@ What it registers:
 | Piece | What it does |
 |---|---|
 | `SessionStart` hook (5s, new sessions only) | One line when a session starts: prompts since your last nudge and this week's most common gap, e.g. "39 prompts since your last nudge. This week's most common gap: no output format or example (13 of 15 nudges)". Shown to you, not added to Claude's context (no tokens). Silent on resume, with no history yet, or when nudge mode is `off`. |
-| `UserPromptSubmit` hook (25s) | Runs `prompt-coach nudge`: scores the prompt, blocks with a rewrite (coach/always) or injects the refine directive (auto). |
+| `UserPromptSubmit` hook (25s) | Runs `prompt-coach nudge`: scores the prompt, blocks with a rewrite (coach/always) or improves it in place (auto: the refine directive, or the LLM's rewrite with `auto_rewrite`). Also handles the `y`/`n` reply to a block. |
 | `Stop` hook (10s) | Runs `prompt-coach nudge` for the hint-mode tip. |
 | `/prompt-coach:accept` | Resends the rewrite `nudge` held back. |
 | `/prompt-coach:original` | Resends your original prompt untouched. |
 | `/prompt-coach:run <cmd>` | Runs any `prompt-coach` subcommand (`report --since 7d`, `dash --plain`, ...). |
 
 `UserPromptSubmit` can only `block` (text reason) or add context, so there
-is no real accept/reject button. Instead, when `nudge` blocks a prompt with
-a rewrite it stashes `{original, rewritten}` keyed by session ID
-(`~/.cache/prompt-coach/nudge_pending.json`). `accept` resends the rewrite;
-`original` resends your prompt; both mark the session to skip the nudge
-gate once, so the resend isn't held back again. The three skills are
+is no real accept/reject button, and the hook can't replace your prompt
+text. Instead, when `nudge` blocks a prompt with a rewrite it stashes
+`{original, rewritten}` keyed by session ID
+(`~/.cache/prompt-coach/nudge_pending.json`). Then:
+
+| You send | What happens |
+|---|---|
+| `y` | Goes through; the rewrite rides along as context and Claude answers it |
+| `n` | Same, with your original prompt |
+| `/prompt-coach:accept` / `:original` | Same result via the skills; they also mark the session to skip the nudge gate once |
+| anything else | Handled normally; the pending rewrite is dropped, so a later `y` can't resurrect it |
+
+The desktop app never shows the text that was actually sent, so every path
+tells Claude to open its reply by quoting it (`Sent (prompt-coach rewrite):`
+or `Sent (your original prompt):`). The three skills are
 user-only (`disable-model-invocation`), so Claude cannot trigger them.
 
 Plugin skills are always namespaced `/<plugin>:<skill>`, which is why the
@@ -137,7 +147,12 @@ see the `nudge` row above.
 
 The LLM client refuses any endpoint that is not localhost or a private
 (RFC1918) address unless you explicitly set `allow_remote = true` in config.
-No cloud API keys, no telemetry, no egress.
+By default: no cloud API keys, no telemetry, no egress.
+
+Opting in to a cloud rewrite model (e.g. DeepSeek via OpenRouter) means
+triggered prompts, plus the project-doc excerpt and recent prompts used as
+context, leave the machine. Keep the key out of config with `api_key_cmd`,
+and prefer a provider account that enforces zero data retention.
 
 ## Configuration
 
@@ -146,6 +161,16 @@ this for you), or env vars:
 
 - `PROMPT_COACH_API_BASE` - local LLM endpoint (default `http://192.168.1.123:11434/v1`)
 - `PROMPT_COACH_MODEL` - analysis model (default `qwen3-coder-30b:latest`, 32k num_ctx baked in)
+- `PROMPT_COACH_ALLOW_REMOTE` / `[llm] allow_remote` - allow a non-private endpoint (default false)
+- `PROMPT_COACH_API_KEY_CMD` / `[llm] api_key_cmd` - shell command that prints the
+  API key, run only when an LLM client is built, so the key never sits in config.
+  `PROMPT_COACH_API_KEY` still wins for one-off runs.
+- `PROMPT_COACH_REASONING` / `[llm] reasoning` - `false` asks an OpenRouter-style
+  endpoint to skip reasoning (unset = send nothing). Needed for DeepSeek v4
+  flash, which otherwise spends its whole budget reasoning and times out.
+- `PROMPT_COACH_NUDGE_MODE` / `[nudge] mode` - `coach` (default), `auto`, `always`, `hint`, `off`
+- `PROMPT_COACH_NUDGE_AUTO_REWRITE` / `[nudge] auto_rewrite` - in auto mode, send the
+  LLM's rewrite straight through instead of the self-refine directive (default false)
 - `PROMPT_COACH_HERMES_DB`, `PROMPT_COACH_CLAUDE_PROJECTS`, `PROMPT_COACH_COPILOT_DIR`,
   `PROMPT_COACH_CODEX_DIR`, `PROMPT_COACH_CACHE_DIR`
 - `PROMPT_COACH_ENABLED_STORES` - comma-separated store list (default: all four

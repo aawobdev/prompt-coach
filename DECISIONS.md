@@ -1319,3 +1319,66 @@ address and a price; no real prompt needed it).
 **Affects**: analysis/metrics.py, tests/test_metrics.py.
 **Decided by**: Alistair ("fix the remaining paste gap"), 2026-09-25.
 
+
+## 2026-09-27 - Cloud rewrite model (DeepSeek via OpenRouter), opt-in
+
+**Trigger**: the local Ollama box is usually off, so coach/always rewrites
+silently fell back to tips. Alistair asked for a cheap cloud model instead.
+**Decision**: supersedes "No cloud keys in config" (2026-07-20) for users who
+opt in; the default stays local-only. Two new `[llm]` keys:
+- `api_key_cmd`: a shell command that prints the key, run only when an LLM
+  client is built (every hook loads config, so never at load). The key never
+  touches disk. Alistair's points at a bws secret
+  (`PROMPT_COACH_OPENROUTER_API_KEY`, a dedicated OpenRouter key capped at $5).
+- `reasoning = false`: DeepSeek v4 flash spent its whole 800-token budget
+  reasoning and returned no content (26 s, past the 20 s hook timeout).
+  With it off: v4-flash 3.6-9.3 s, v4.1-flash 0.7-2.9 s. Chosen model:
+  `deepseek/deepseek-v4.1-flash` (tighter rewrites that keep the user's reasons).
+`allow_remote = true` is still required; the client guard is unchanged.
+**Affects**: config.py, llm/client.py, cli.py (`make_llm`, `setup`), nudge.py.
+**Decided by**: Alistair ("deepseek v4 flash comes to mind", "go ahead with a
+dedicated key"), 2026-09-27.
+
+## 2026-09-27 - Accepting a rewrite: `y`/`n` replies, and the reply quotes what was sent
+
+**Trigger**: live desktop testing. (1) After `/prompt-coach:accept` the app
+collapses the block card and never shows the skill's injected text, so the
+user couldn't see what was sent. (2) Alistair asked for a button.
+**Decision**: a button isn't possible. UserPromptSubmit output is only
+`decision`/`reason`/`additionalContext`/`sessionTitle`/`suppressOriginalPrompt`
+(https://code.claude.com/docs/en/hooks, checked 2026-09-27). So:
+- The block offers "Reply y to send the rewrite, n to send your original".
+  `y`/`n` pass through and carry the chosen text as additionalContext. Any
+  other non-slash prompt drops the pending rewrite, so a later `y` answering
+  Claude can't resurrect a stale offer.
+- Every delivery path tells Claude to open with a `Sent (...)` blockquote.
+- Always mode lets a bare y/n/yes/no/ok through: found live, it had been
+  "rewriting" a plain `y` into nonsense.
+**Cost**: about 180 extra input and 80 output tokens per accepted rewrite (estimated).
+**Affects**: nudge.py, plugin/skills/accept/SKILL.md.
+**Decided by**: Alistair ("make the fix first then retest", "yes build it"), 2026-09-27.
+
+## 2026-09-27 - Auto mode `auto_rewrite`: the model's rewrite goes straight through
+
+**Trigger**: Alistair wanted both paths: offer the rewrite (coach/always), or
+send it straight to the session model with no interruption.
+**Decision**: `[nudge] auto_rewrite = true` makes auto mode rewrite triggered
+prompts with the `[llm]` model and inject the rewrite as additionalContext.
+It's off by default. Any failure falls back to the LLM-free self-refine
+directive. Pastes are never rewritten. Measured at 1.5 s from a bare hook env.
+**Rewrite prompt fix (found in the first live run)**: with only a working
+directory as context, the rewriter turned "tell me everything about green"
+into "what does green refer to in this project?". `_REWRITE_SYSTEM` now
+decides general vs project first. Old vs new on real context: general probes
+went from 3/4 to 4/4 correct; 5 project prompts stayed grounded. One
+(a pasted Supabase inactivity email) now reads generally, which is judged a
+fair reading and not a regression.
+**Known gap**: with auto_rewrite on, every triggered prompt goes to
+OpenRouter, including personal ones typed in any folder. There's no
+per-folder opt-out yet. Mitigated: Alistair's OpenRouter account enforces
+zero data retention (ZDR). Verified 2026-09-27 with the dedicated key:
+forcing a non-ZDR provider (DeepSeek's own API, Alibaba) is refused with
+"ZDR violation (account settings)". OpenRouter's own prompt-logging setting
+isn't visible via the API and is unverified.
+**Affects**: config.py, nudge.py, cli.py.
+**Decided by**: Alistair ("build path 1", "switch it on globally"), 2026-09-27.

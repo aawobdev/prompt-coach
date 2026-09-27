@@ -129,15 +129,22 @@ def sync_with_progress(cache: CacheDB, cfg: Config, *, force: bool = False):
 
 def make_llm(cfg: Config) -> LocalLLM | None:
     """LocalLLM when the endpoint is reachable, else None (degraded mode)."""
+    from prompt_coach.config import APIKeyCommandFailed
     from prompt_coach.llm.client import LocalLLM, RemoteEndpointRefused
 
+    try:
+        api_key = cfg.llm.resolve_api_key()
+    except APIKeyCommandFailed as exc:
+        typer.echo(f"LLM disabled: {exc}", err=True)
+        return None
     try:
         llm = LocalLLM(
             cfg.llm.base_url,
             cfg.llm.model,
-            api_key=cfg.llm.api_key,
+            api_key=api_key,
             timeout=cfg.llm.timeout,
             allow_remote=cfg.llm.allow_remote,
+            reasoning=cfg.llm.reasoning,
         )
     except RemoteEndpointRefused as exc:
         typer.echo(f"Refusing remote endpoint: {exc}", err=True)
@@ -445,13 +452,14 @@ def _offer_plugin_setup() -> None:
 
 
 def _setup_wizard():
+    import dataclasses
+
     from prompt_coach.config import (
         MODEL_FIT_MODES,
         NUDGE_MODES,
+        APIKeyCommandFailed,
         Config,
-        LLMConfig,
         ModelFitConfig,
-        NudgeConfig,
         StoresConfig,
         config_file_path,
         write_config,
@@ -488,10 +496,14 @@ def _setup_wizard():
     model = typer.prompt("  model", default=cfg.llm.model)
     try:
         probe = LocalLLM(
-            base_url, model, api_key=cfg.llm.api_key, timeout=2.0, allow_remote=cfg.llm.allow_remote
+            base_url,
+            model,
+            api_key=cfg.llm.resolve_api_key(),
+            timeout=2.0,
+            allow_remote=cfg.llm.allow_remote,
         )
         reachable = probe.available()
-    except RemoteEndpointRefused as exc:
+    except (RemoteEndpointRefused, APIKeyCommandFailed) as exc:
         typer.echo(f"  refused: {exc}", err=True)
         reachable = False
     typer.echo(f"  -> {'reachable now' if reachable else 'not reachable right now'}")
@@ -518,13 +530,7 @@ def _setup_wizard():
         dir_overrides[here] = override_mode
 
     new_cfg = Config(
-        llm=LLMConfig(
-            base_url=base_url,
-            model=model,
-            api_key=cfg.llm.api_key,
-            allow_remote=cfg.llm.allow_remote,
-            timeout=cfg.llm.timeout,
-        ),
+        llm=dataclasses.replace(cfg.llm, base_url=base_url, model=model),
         stores=StoresConfig(
             hermes_db=cfg.stores.hermes_db,
             claude_projects_dir=cfg.stores.claude_projects_dir,
@@ -532,9 +538,7 @@ def _setup_wizard():
             codex_dir=cfg.stores.codex_dir,
             enabled=frozenset(enabled),
         ),
-        nudge=NudgeConfig(
-            mode=nudge_mode, llm_timeout=cfg.nudge.llm_timeout, dir_overrides=dir_overrides
-        ),
+        nudge=dataclasses.replace(cfg.nudge, mode=nudge_mode, dir_overrides=dir_overrides),
         model_fit=ModelFitConfig(mode=model_fit_mode),
         cache_dir=cfg.cache_dir,
     )

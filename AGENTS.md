@@ -82,11 +82,12 @@ uv run prompt-coach query "what did I work on last week?"
   `src/prompt_coach/`
 - Stdlib `sqlite3` for all DB access (read-only sources + local cache DB
   with FTS5). Synchronous code throughout: no ORM, no asyncio.
-- **openai** sync client to a local model only: direct Ollama
+- **openai** sync client. Default is a local model: direct Ollama
   (`http://192.168.1.123:11434/v1`, default `qwen3-coder-30b:latest`, 32k num_ctx) or the
   llm-api gateway on localhost. The LLM client refuses non-private base URLs
   unless `allow_remote = true` is configured: the privacy guarantee depends
-  on it.
+  on it. A cloud model is an explicit opt-in (DECISIONS.md 2026-09-27);
+  Alistair's live config uses DeepSeek v4.1 flash via OpenRouter.
 - **ruff** (lint, incl. `S` security rules), **black** (format), **pytest**
   (+respx for HTTP mocking).
 - `server/` is an empty placeholder; the read-only HTTP API is phase 2.
@@ -188,7 +189,7 @@ Configure in `~/.config/prompt-coach/config.toml` under `[nudge] mode`.
 - **Em dashes**: do not use them anywhere in this repo. Replace with a
   hyphen, colon, or rephrase.
 - **Privacy**: never log or print prompt content in diagnostics; counts and
-  hashes only. Never add a cloud API key to config.
+  hashes only. Never write a cloud API key into config: use `api_key_cmd`.
 
 ## Integration with llm-api
 

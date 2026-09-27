@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from prompt_coach.config import Config, LLMConfig, ModelFitConfig, NudgeConfig, StoresConfig
 from prompt_coach.nudge import (
     _resolve_mode,
@@ -17,7 +19,7 @@ from prompt_coach.nudge import (
 _UNREACHABLE = "http://127.0.0.1:9"  # nothing listens here -- deterministic "LLM down"
 
 
-def make_cfg(tmp_path, mode="coach", base_url=_UNREACHABLE, dir_overrides=None):
+def make_cfg(tmp_path, mode="coach", base_url=_UNREACHABLE, dir_overrides=None, auto_rewrite=False):
     return Config(
         llm=LLMConfig(
             base_url=base_url, model="test-model", api_key="x", allow_remote=False, timeout=5.0
@@ -28,7 +30,12 @@ def make_cfg(tmp_path, mode="coach", base_url=_UNREACHABLE, dir_overrides=None):
             copilot_dir=None,
             codex_dir=None,
         ),
-        nudge=NudgeConfig(mode=mode, llm_timeout=2.0, dir_overrides=dir_overrides or {}),
+        nudge=NudgeConfig(
+            mode=mode,
+            llm_timeout=2.0,
+            dir_overrides=dir_overrides or {},
+            auto_rewrite=auto_rewrite,
+        ),
         model_fit=ModelFitConfig(mode="descriptive"),
         cache_dir=tmp_path / "cache",
     )
@@ -343,6 +350,104 @@ class TestPendingRewrite:
         assert resp["decision"] == "block"  # back to normal always-mode blocking
 
 
+class TestYesNoReply:
+    """Hooks can't render a button (hooks docs, checked 2026-09-27), so the
+    next-cheapest accept is a one-letter reply: `y` sends the rewrite, `n`
+    the original, both delivered as additionalContext (the hook can't
+    replace the prompt text). Any other prompt drops the pending rewrite,
+    so a later `y` answering one of Claude's own questions can't resurrect
+    a stale rewrite."""
+
+    def _block(self, tmp_path, monkeypatch, mode="always"):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path, mode=mode)
+        prompt = SHORT_ORDINARY if mode == "always" else LONG_WEAK  # coach needs a weak one
+        resp = build_response({"prompt": prompt, "session_id": "s1"}, cfg)
+        assert resp["decision"] == "block"
+        return cfg
+
+    @staticmethod
+    def _context(resp):
+        return resp["hookSpecificOutput"]["additionalContext"]
+
+    def test_block_reason_offers_y_and_n(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        resp = build_response(
+            {"prompt": SHORT_ORDINARY, "session_id": "s1"}, make_cfg(tmp_path, mode="always")
+        )
+        assert "Reply y to send the rewrite, n to send your original" in resp["reason"]
+
+    def test_y_injects_the_rewrite_and_lets_the_prompt_through(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch)
+        resp = build_response({"prompt": "y", "session_id": "s1"}, cfg)
+        assert "decision" not in resp
+        ctx = self._context(resp)
+        assert "REWRITTEN" in ctx
+        assert "**Sent (prompt-coach rewrite):**" in ctx
+        assert SHORT_ORDINARY not in ctx
+
+    def test_n_injects_the_original(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch)
+        ctx = self._context(build_response({"prompt": "n", "session_id": "s1"}, cfg))
+        assert SHORT_ORDINARY in ctx
+        assert "REWRITTEN" not in ctx
+        assert "**Sent (your original prompt):**" in ctx
+
+    def test_reply_is_case_and_whitespace_insensitive(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch)
+        ctx = self._context(build_response({"prompt": "  Y \n", "session_id": "s1"}, cfg))
+        assert "REWRITTEN" in ctx
+
+    def test_reply_is_one_shot_and_sets_no_skip_flag(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch)
+        build_response({"prompt": "y", "session_id": "s1"}, cfg)
+        assert consume_pending_rewrite(cfg.cache_dir, "s1", "rewritten") is None
+        # No resend follows a y/n reply, so the next real prompt is judged normally.
+        resp = build_response({"prompt": SHORT_ORDINARY, "session_id": "s1"}, cfg)
+        assert resp["decision"] == "block"
+
+    def test_other_prompt_drops_the_pending_rewrite(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch, mode="coach")  # coach: gate spent, won't reblock
+        build_response({"prompt": "actually, never mind", "session_id": "s1"}, cfg)
+        resp = build_response({"prompt": "y", "session_id": "s1"}, cfg)
+        assert resp == {}  # a plain y now, e.g. answering Claude -- nothing injected
+
+    def test_slash_command_does_not_drop_the_pending_rewrite(self, tmp_path, monkeypatch):
+        cfg = self._block(tmp_path, monkeypatch, mode="coach")
+        build_response({"prompt": "/prompt-coach:accept", "session_id": "s1"}, cfg)
+        assert consume_pending_rewrite(cfg.cache_dir, "s1", "rewritten") == "REWRITTEN"
+
+    def test_y_with_nothing_pending_is_an_ordinary_prompt(self, tmp_path):
+        assert build_response({"prompt": "y", "session_id": "s1"}, make_cfg(tmp_path)) == {}
+
+    @pytest.mark.parametrize("reply", ["y", "n", "yes", "No", "ok"])
+    def test_always_mode_never_rewrites_a_bare_confirmation(self, tmp_path, monkeypatch, reply):
+        """Found live 2026-09-27: with nothing pending, always mode blocked a
+        plain `y` (answering one of Claude's questions) and 'rewrote' it into
+        nonsense."""
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr(
+            "prompt_coach.nudge.rewrite_prompt", lambda prompt, llm, context=None: "REWRITTEN"
+        )
+        cfg = make_cfg(tmp_path, mode="always")
+        assert build_response({"prompt": reply, "session_id": "s1"}, cfg) == {}
+
+    def test_y_is_honoured_under_a_different_mode(self, tmp_path, monkeypatch):
+        """Mode resolution is per-cwd; a pending offer the user saw must still
+        work if their answer resolves to a different (non-off) mode."""
+        self._block(tmp_path, monkeypatch)  # blocked under "always"
+        off = make_cfg(tmp_path, mode="coach")
+        assert "REWRITTEN" in self._context(
+            build_response({"prompt": "y", "session_id": "s1"}, off)
+        )
+
+
 TASK_NOTIFICATION = (
     "<task-notification>\n<task-id>abc123</task-id>\n<status>completed</status>\n"
     "<summary>Background command completed (exit code 0)</summary>\n"
@@ -641,6 +746,88 @@ class TestHermesPreLlmCall:
         assert build_response(payload, cfg) == {}
 
 
+class TestAutoRewrite:
+    """Path 1 (2026-09-27): auto mode with `auto_rewrite = true` has the
+    rewrite model improve a weak prompt and delivers it straight to the
+    session model as additionalContext -- no block, no reply needed. Off by
+    default, and any rewrite failure falls back to today's self-refine
+    directive, so auto mode never gets worse than it was."""
+
+    def _llm(self, monkeypatch, rewrite="REWRITTEN"):
+        seen = {}
+
+        def fake_rewrite(prompt, llm, context=None):
+            seen["context"] = context
+            return rewrite
+
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", lambda cfg: object())
+        monkeypatch.setattr("prompt_coach.nudge.rewrite_prompt", fake_rewrite)
+        return seen
+
+    def _no_llm_allowed(self, monkeypatch):
+        def boom(cfg):
+            raise AssertionError("LLM must not be called here")
+
+        monkeypatch.setattr("prompt_coach.nudge._make_llm", boom)
+
+    @staticmethod
+    def _ctx(resp):
+        return resp["hookSpecificOutput"]["additionalContext"]
+
+    def test_weak_prompt_gets_the_rewrite_injected_without_blocking(self, tmp_path, monkeypatch):
+        self._llm(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert "decision" not in resp
+        assert "REWRITTEN" in self._ctx(resp)
+        assert "**Sent (prompt-coach rewrite):**" in self._ctx(resp)
+        assert "test-model" in resp["systemMessage"]
+
+    def test_rewrite_is_grounded_in_session_context(self, tmp_path, monkeypatch):
+        seen = self._llm(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        build_response({"prompt": LONG_WEAK, "session_id": "s1", "cwd": str(tmp_path)}, cfg)
+        assert seen["context"] and str(tmp_path) in seen["context"]
+
+    def test_off_by_default_keeps_the_llm_free_directive(self, tmp_path, monkeypatch):
+        self._no_llm_allowed(monkeypatch)
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, make_cfg(tmp_path, "auto"))
+        assert "prompt-coach auto-improve" in self._ctx(resp)
+
+    def test_unreachable_llm_falls_back_to_self_refine(self, tmp_path):
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)  # _UNREACHABLE endpoint
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert "prompt-coach auto-improve" in self._ctx(resp)
+
+    def test_failed_rewrite_falls_back_to_self_refine(self, tmp_path, monkeypatch):
+        self._llm(monkeypatch, rewrite=None)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        resp = build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        assert "prompt-coach auto-improve" in self._ctx(resp)
+
+    def test_good_prompt_passes_without_an_llm_call(self, tmp_path, monkeypatch):
+        self._no_llm_allowed(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        assert build_response({"prompt": SHORT_ORDINARY, "session_id": "s1"}, cfg) == {}
+
+    def test_paste_is_never_rewritten(self, tmp_path, monkeypatch):
+        self._no_llm_allowed(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        resp = build_response({"prompt": PASTE, "session_id": "s1"}, cfg)
+        assert "prompt-coach auto-improve" in self._ctx(resp)
+
+    def test_audit_records_the_rewrite(self, tmp_path, monkeypatch):
+        self._llm(monkeypatch)
+        cfg = make_cfg(tmp_path, mode="auto", auto_rewrite=True)
+        build_response({"prompt": LONG_WEAK, "session_id": "s1"}, cfg)
+        from prompt_coach.cache import CacheDB
+
+        cache = CacheDB(cfg.cache_dir / "cache.db")
+        events = cache.get_audit_events(limit=10)
+        cache.close()
+        assert events[0]["refined_prompt"] == "REWRITTEN"
+
+
 class TestAuditIntegration:
     """Verify that nudge interventions actually write to the audit log."""
 
@@ -803,3 +990,14 @@ class TestSessionStartDispatch:
         build_response({"hook_event_name": "SessionStart", "source": "startup"}, cfg)
         assert len(get_score_history(cfg.cache_dir)) == 2
         assert not (cfg.cache_dir / "cache.db").exists()
+
+
+def test_rewrite_prompt_keeps_general_questions_general():
+    """Found live 2026-09-27: with only a working directory as context, the
+    rewriter turned "tell me everything about green" into "what does green
+    refer to in this project?" and sent Claude searching an empty folder.
+    Old-vs-new over real prompts is in DECISIONS.md; this pins the guard."""
+    from prompt_coach.nudge import _REWRITE_SYSTEM
+
+    assert "general-knowledge or everyday question" in _REWRITE_SYSTEM
+    assert "ignore the session context entirely" in _REWRITE_SYSTEM

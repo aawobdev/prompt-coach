@@ -43,6 +43,7 @@ class LocalLLM:
         api_key: str = "ollama",
         timeout: float = 120.0,
         allow_remote: bool = False,
+        reasoning: bool | None = None,
     ):
         if not allow_remote and not _is_private_host(base_url):
             raise RemoteEndpointRefused(
@@ -53,6 +54,8 @@ class LocalLLM:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        # Sent only when set: see LLMConfig.reasoning.
+        self._extra_body = None if reasoning is None else {"reasoning": {"enabled": reasoning}}
         self._client = openai.OpenAI(
             base_url=self.base_url, api_key=api_key, timeout=timeout, max_retries=1
         )
@@ -86,6 +89,7 @@ class LocalLLM:
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    extra_body=self._extra_body,
                 )
             except openai.OpenAIError as exc:
                 raise LLMUnavailable(f"local model call failed: {type(exc).__name__}") from exc

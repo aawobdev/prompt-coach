@@ -750,3 +750,20 @@ def test_migrate_legacy_rejects_a_path_that_is_not_the_repo(env, tmp_path):
     result = runner.invoke(app, ["migrate-legacy", "--repo", str(tmp_path)])
     assert result.exit_code == 1
     assert "doesn't look like the prompt-coach repo" in result.output
+
+
+def test_setup_wizard_preserves_settings_it_does_not_ask_about(env):
+    # The wizard only asks about some keys; rebuilding the dataclasses by
+    # hand used to drop the rest on rewrite (api_key_cmd, reasoning,
+    # auto_rewrite added 2026-09-27).
+    config_path = env / "xdg-config" / "prompt-coach" / "config.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        '[llm]\napi_key_cmd = "echo k"\nreasoning = false\n\n[nudge]\nauto_rewrite = true\n'
+    )
+    result = runner.invoke(app, ["setup"], input="\n" * 8 + "n\nn\nn\n")
+    assert result.exit_code == 0, result.output
+    written = config_path.read_text()
+    assert 'api_key_cmd = "echo k"' in written
+    assert "reasoning = false" in written
+    assert "auto_rewrite = true" in written

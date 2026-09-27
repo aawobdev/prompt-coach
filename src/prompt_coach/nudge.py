@@ -211,7 +211,14 @@ _REWRITE_SYSTEM = (
     "enumeration (options, comparisons, findings, inventories), have the "
     "rewrite ask for it as a table -- or a visual (chart/diagram) when the "
     "items have relationships or proportions -- rather than prose bullets. "
-    "When a SESSION CONTEXT block is provided "
+    "First decide what the prompt is about. If it is a general-knowledge or "
+    "everyday question (not about this codebase, its files, or the session's "
+    "work), rewrite it as a general question and ignore the session context "
+    "entirely -- never reinterpret an everyday word as a project term or send "
+    "the assistant searching the working directory for it. A question that "
+    "names this project's services, accounts, data, or code is project work "
+    "even if phrased generally. Otherwise, "
+    "when a SESSION CONTEXT block is provided "
     "(working directory, project docs, earlier prompts), ground the rewrite "
     "in it: use the project's real names, paths, and terminology instead of "
     "generic placeholders, and read ambiguous references against what the "
@@ -289,17 +296,19 @@ def rewrite_prompt(prompt: str, llm: LocalLLM, context: str | None = None) -> st
 def _make_llm(cfg: Config) -> LocalLLM | None:
     """LocalLLM bounded by nudge's own (short) timeout, not report/query's
     120s default -- this runs inline in a hook, not a background job."""
+    from prompt_coach.config import APIKeyCommandFailed
     from prompt_coach.llm.client import LocalLLM, RemoteEndpointRefused
 
     try:
         llm = LocalLLM(
             cfg.llm.base_url,
             cfg.llm.model,
-            api_key=cfg.llm.api_key,
+            api_key=cfg.llm.resolve_api_key(),
             timeout=cfg.nudge.llm_timeout,
             allow_remote=cfg.llm.allow_remote,
+            reasoning=cfg.llm.reasoning,
         )
-    except RemoteEndpointRefused:
+    except (RemoteEndpointRefused, APIKeyCommandFailed):
         return None
     return llm if llm.available() else None
 
@@ -315,9 +324,58 @@ def _block_reason(rewritten: str) -> str:
     return (
         "prompt-coach held this prompt back -- here's a tighter rewrite:\n\n"
         f"{rewritten}\n\n"
-        f"Run {ACCEPT_COMMAND} to send the rewrite, or {ORIGINAL_COMMAND} to send "
-        "your prompt as-is."
+        "Reply y to send the rewrite, n to send your original "
+        f"(or run {ACCEPT_COMMAND} / {ORIGINAL_COMMAND})."
     )
+
+
+# One-letter answers to a block (2026-09-27): hooks can't render a button or
+# replace the prompt text, so `y`/`n` go through as-is and the chosen text
+# rides along as additionalContext -- the same channel auto mode uses.
+_REPLY_WANTS = {"y": "rewritten", "n": "original"}
+# With nothing pending these are answers to Claude's own questions; always
+# mode used to block and "rewrite" them into nonsense (found live 2026-09-27).
+_BARE_CONFIRMATIONS = frozenset({"y", "n", "yes", "no", "ok", "okay"})
+_REPLY_HEADINGS = {
+    "rewritten": "Sent (prompt-coach rewrite):",
+    "original": "Sent (your original prompt):",
+}
+
+
+def _reply_response(text: str, want: str) -> dict:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": (
+                "prompt-coach: the user's one-letter message is their answer to "
+                "prompt-coach's offer, not a request in itself. Their actual "
+                "request is the text below -- respond to it directly. They can't "
+                "see that text in the chat, so begin your reply with a "
+                f"blockquote showing it verbatim, headed `**{_REPLY_HEADINGS[want]}**`, "
+                f"then answer it below.\n\n{text}"
+            ),
+        }
+    }
+
+
+def _answer_pending(cache_dir: Path, session_id: str, prompt: str) -> dict | None:
+    """Handle a prompt sent while a block's rewrite is pending: `y`/`n`
+    deliver one side of it; any other non-slash prompt drops it, so a later
+    `y` answering one of Claude's own questions can't resurrect a stale
+    offer. Slash commands leave it alone -- /prompt-coach:accept consumes it
+    itself. Returns None when the prompt should be handled normally."""
+    data = _load_pending_state(cache_dir)
+    if session_id not in data["pending"]:
+        return None
+    want = _REPLY_WANTS.get(prompt.strip().lower())
+    if want is None:
+        if not prompt.lstrip().startswith("/"):
+            del data["pending"][session_id]
+            _write_pending_state(cache_dir, data)
+        return None
+    entry = data["pending"].pop(session_id)
+    _write_pending_state(cache_dir, data)
+    return _reply_response(entry.get(want, ""), want)
 
 
 # Auto mode's whole trick: UserPromptSubmit can't replace the prompt text
@@ -354,6 +412,27 @@ _AUTO_RESPONSE = {
         "asked to refine this prompt before answering (auto mode)."
     ),
 }
+
+
+def _auto_rewrite_response(rewritten: str, model: str) -> dict:
+    """Path 1: the rewrite rides along as additionalContext (the hook can't
+    replace the prompt text), and the reply opens by quoting it -- the user
+    otherwise never sees it."""
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": (
+                "prompt-coach auto-improve: the user's prompt tripped a weak-prompt "
+                "trigger and has been rewritten. Treat the rewritten request below "
+                "as what the user is asking; use their original wording only to "
+                "resolve ambiguity. They can't see the rewrite in the chat, so "
+                "begin your reply with a blockquote showing it verbatim, headed "
+                f"`**{_REPLY_HEADINGS['rewritten']}**`, then answer it below."
+                f"\n\n{rewritten}"
+            ),
+        },
+        "systemMessage": f"prompt-coach: rewrote this prompt with {model} (auto mode).",
+    }
 
 
 def _pending_path(cache_dir: Path) -> Path:
@@ -554,6 +633,10 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if not prompt:
         return {}
 
+    answered = _answer_pending(cfg.cache_dir, session_id, prompt)
+    if answered is not None:
+        return answered
+
     if _pop_skip_next(cfg.cache_dir, session_id):
         # This is the resend triggered by /prompt-coach:accept or :original
         # (consume_pending_rewrite set this flag) -- let it through as-is,
@@ -563,14 +646,20 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if mode == "auto":
         # Same calibrated triggers as coach (and _tip_for already screens
         # out machine prompts), but no once-per-session gate: auto never
-        # interrupts, so there's no nag cost to ration. No LLM call either
-        # (see _AUTO_RESPONSE), so this path is near-free and never needs
-        # a degraded fallback.
+        # interrupts, so there's no nag cost to ration. By default no LLM
+        # call either (see _AUTO_RESPONSE); with auto_rewrite the [llm]
+        # model rewrites it first, falling back to that directive.
         tip = _tip_for(prompt)
-        if tip is not None:
-            _record_audit(cfg, payload, prompt, trigger=tip)
         record_prompt(cfg.cache_dir, prompt, was_nudged=tip is not None)
-        return _AUTO_RESPONSE if tip is not None else {}
+        if tip is None:
+            return {}
+        rewritten = None
+        if cfg.nudge.auto_rewrite and tip != _TIP_PASTE:  # never rewrite a paste
+            llm = _make_llm(cfg)
+            if llm is not None:
+                rewritten = rewrite_prompt(prompt, llm, context=gather_context(payload))
+        _record_audit(cfg, payload, prompt, trigger=tip, refined=rewritten)
+        return _auto_rewrite_response(rewritten, cfg.llm.model) if rewritten else _AUTO_RESPONSE
 
     if mode == "hint":
         # Hint mode: let the prompt through untouched. The Stop hook
@@ -582,6 +671,8 @@ def build_response(payload: dict, cfg: Config) -> dict:
     if mode == "always":
         if _is_machine_prompt(prompt):
             return {}  # harness traffic, not a prompt anyone typed
+        if prompt.strip().lower() in _BARE_CONFIRMATIONS:
+            return {}  # answering Claude, not a request -- nothing to rewrite
         if is_bare_paste(prompt):
             # A rewrite is kept "about as long as a well-written ask" (see
             # _REWRITE_SYSTEM), so rewriting a mostly-pasted prompt risks

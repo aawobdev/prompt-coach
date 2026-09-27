@@ -130,6 +130,14 @@ class TestSkills:
         assert expected in body.splitlines()
         assert "nudge-consume" in typer.main.get_command(app).commands
 
+    def test_accept_skill_echoes_the_rewrite_it_sent(self):
+        # The desktop app collapses the block card once /prompt-coach:accept
+        # runs and never displays the skill's injected text, so without this
+        # the user can't see which rewrite was actually sent (found in live
+        # testing, 2026-09-27).
+        body = (PLUGIN / "skills" / "accept" / "SKILL.md").read_text()
+        assert "**Sent (prompt-coach rewrite):**" in body
+
     def test_run_skill_passes_arguments_through(self):
         body = (PLUGIN / "skills" / "run" / "SKILL.md").read_text()
         assert "!`${CLAUDE_PLUGIN_ROOT}/scripts/pc $ARGUMENTS`" in body.splitlines()
