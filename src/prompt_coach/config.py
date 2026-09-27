@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess  # noqa: S404 -- api_key_cmd runs a user-configured command, by design
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +16,11 @@ DEFAULT_API_BASE = "http://192.168.1.123:11434/v1"
 DEFAULT_MODEL = "qwen3-coder-30b:latest"
 
 
+class APIKeyCommandFailed(RuntimeError):
+    """api_key_cmd failed, timed out, or printed nothing. The message never
+    includes the command's output: it may hold a partial secret."""
+
+
 @dataclass(frozen=True)
 class LLMConfig:
     base_url: str
@@ -22,6 +28,37 @@ class LLMConfig:
     api_key: str
     allow_remote: bool
     timeout: float
+    # Shell command that prints the API key, run only when an LLM client is
+    # actually built -- never at config load, since every hook call loads
+    # config (DECISIONS.md 2026-09-27). Keeps cloud keys out of config.toml:
+    # point it at a secrets manager (e.g. a `bws secret get` lookup).
+    api_key_cmd: str = ""
+    # None = send nothing (Ollama, and any endpoint that doesn't know the
+    # field). False = ask an OpenRouter-style endpoint to skip reasoning:
+    # DeepSeek v4 flash otherwise spends the whole token budget thinking and
+    # returns no content (measured 2026-09-27).
+    reasoning: bool | None = None
+
+    def resolve_api_key(self, timeout: float = 10.0) -> str:
+        if not self.api_key_cmd:
+            return self.api_key
+        try:
+            result = subprocess.run(  # noqa: S602 -- user's own configured command
+                self.api_key_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise APIKeyCommandFailed(f"api_key_cmd timed out after {timeout}s") from None
+        key = result.stdout.strip()
+        if result.returncode != 0:
+            raise APIKeyCommandFailed(f"api_key_cmd exited with status {result.returncode}")
+        if not key:
+            raise APIKeyCommandFailed("api_key_cmd printed nothing")
+        return key
 
 
 # The four live, auto-discovered stores (ChatGPT export and JSON import are
@@ -130,6 +167,20 @@ def load_config(path: Path | None = None) -> Config:
     base_url = env("API_BASE", llm_cfg.get("api_base", DEFAULT_API_BASE))
     model = env("MODEL", llm_cfg.get("model", DEFAULT_MODEL))
     api_key = env("API_KEY", llm_cfg.get("api_key", "ollama"))
+    # An explicit PROMPT_COACH_API_KEY beats the command (handy for one-off
+    # runs); the command beats a plain api_key in the file.
+    api_key_cmd = (
+        ""
+        if "PROMPT_COACH_API_KEY" in os.environ
+        else env("API_KEY_CMD", llm_cfg.get("api_key_cmd", ""))
+    )
+    reasoning_raw = env("REASONING", "")
+    reasoning: bool | None
+    if reasoning_raw:
+        reasoning = reasoning_raw.lower() in ("1", "true", "yes")
+    else:
+        file_reasoning = llm_cfg.get("reasoning")
+        reasoning = None if file_reasoning is None else bool(file_reasoning)
     allow_remote = env(
         "ALLOW_REMOTE", "true" if llm_cfg.get("allow_remote", False) else "false"
     ).lower() in ("1", "true", "yes")
@@ -188,6 +239,8 @@ def load_config(path: Path | None = None) -> Config:
             api_key=api_key,
             allow_remote=allow_remote,
             timeout=timeout,
+            api_key_cmd=api_key_cmd,
+            reasoning=reasoning,
         ),
         stores=StoresConfig(
             hermes_db=hermes_db,
@@ -227,6 +280,12 @@ def write_config(cfg: Config, path: Path) -> None:
         f"api_key = {_toml_str(cfg.llm.api_key)}",
         f"allow_remote = {str(cfg.llm.allow_remote).lower()}",
         f"timeout = {cfg.llm.timeout}",
+    ]
+    if cfg.llm.api_key_cmd:
+        lines.append(f"api_key_cmd = {_toml_str(cfg.llm.api_key_cmd)}")
+    if cfg.llm.reasoning is not None:
+        lines.append(f"reasoning = {str(cfg.llm.reasoning).lower()}")
+    lines += [
         "",
         "[stores]",
         f"hermes_db = {_toml_str(str(cfg.stores.hermes_db))}",

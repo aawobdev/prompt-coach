@@ -289,17 +289,19 @@ def rewrite_prompt(prompt: str, llm: LocalLLM, context: str | None = None) -> st
 def _make_llm(cfg: Config) -> LocalLLM | None:
     """LocalLLM bounded by nudge's own (short) timeout, not report/query's
     120s default -- this runs inline in a hook, not a background job."""
+    from prompt_coach.config import APIKeyCommandFailed
     from prompt_coach.llm.client import LocalLLM, RemoteEndpointRefused
 
     try:
         llm = LocalLLM(
             cfg.llm.base_url,
             cfg.llm.model,
-            api_key=cfg.llm.api_key,
+            api_key=cfg.llm.resolve_api_key(),
             timeout=cfg.nudge.llm_timeout,
             allow_remote=cfg.llm.allow_remote,
+            reasoning=cfg.llm.reasoning,
         )
-    except RemoteEndpointRefused:
+    except (RemoteEndpointRefused, APIKeyCommandFailed):
         return None
     return llm if llm.available() else None
 
