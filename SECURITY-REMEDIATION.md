@@ -1,10 +1,10 @@
-# Security Remediation Plan — prompt-coach
+# Security Remediation Plan - prompt-coach
 
 _Generated 2026-10-08 from the trivy full scan (weekly CVE job), re-run 2026-10-08._
 
-This document lists the dependency vulnerabilities found in this repo and what needs to change. It is a plan, not a fix — apply it deliberately and run the test suite afterwards.
+This document lists the dependency vulnerabilities found in this repo and what needs to change. It is a plan, not a fix - apply it deliberately and run the test suite afterwards.
 
-**Summary:** 2 findings across 2 packages — 🔴 0 critical, 🟠 1 high, 🟡 1 medium.
+**Summary:** 2 findings across 2 packages - 🔴 0 critical, 🟠 1 high, 🟡 1 medium.
 
 ## Vulnerable packages
 
@@ -29,7 +29,7 @@ If a package is a transitive dependency, `uv lock --upgrade-package` still bumps
 ## Notes
 
 - Severity counts are per (CVE, package) pair; the same upstream bug often appears under several transitive dependency paths.
-- Some advisories are fixed in multiple release lines (e.g. `7.5.5` or `8.0.1`) — pick the line that matches your major version.
+- Some advisories are fixed in multiple release lines (e.g. `7.5.5` or `8.0.1`) - pick the line that matches your major version.
 - Fixes can introduce breaking changes at major-version boundaries. Run the test suite and, for deployed apps, verify the running service afterwards.
 - Re-run `trivy fs --severity CRITICAL,HIGH,MEDIUM .` to confirm the findings clear.
 
