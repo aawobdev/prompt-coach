@@ -1,6 +1,6 @@
 # Project Status - prompt-coach
-Last updated: 2026-10-10 by Claude (Opus 5.5): cost layer part 1 (usage
-readers, pricing, `cost` command, doctor checks). 620 tests.
+Last updated: 2026-10-10 by Claude (Opus 5.5): cost layer parts 1-2 (usage,
+pricing, `cost`, doctor; rules A14-A16, report and dash sections). 636 tests.
 
 ## Cost layer, part 1 (2026-10-10)
 
@@ -13,6 +13,10 @@ and the report/dash sections, (3) the opt-in nudge size warning.
 - `prompt-coach cost [--since 30d] [--by session|folder|model|store|day]`.
 - Dev, 30 days: 1,824 sessions, USD 3,541 est. at list price; within 1.9%
   of the reference parser.
+- Part 2: session rules A14 (right-sized model), A15 (session size), A16
+  (no cold resume), spend-weighted; "Cost (est.)" in `report` and a Cost
+  panel in `dash` (terminal + HTML). Dev scorecard: A14 0.61 fair, A15 0.05
+  weak, A16 0.97 good.
 
 Open:
 - **Work-machine checklist** (spec L1-L5, read-only; report numbers, never

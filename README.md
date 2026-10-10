@@ -242,6 +242,12 @@ every call resends the whole context).
 | Copilot CLI | Yes, per session and model (format not yet verified against real files) |
 | Codex CLI, Copilot Chat, ChatGPT, JSON import | No: listed as "no usage data", never as zero |
 
+`report` and `dash` add a Cost section with three session rules, weighted by
+spend: **A14** right-sized model (Opus on small asks), **A15** session size
+(over 100k context per call or 100 calls), **A16** no cold resume (a large
+session picked up again after the ~5-minute cache expired, which rewrites
+the whole context at the cache-write rate).
+
 Figures are **estimates from list prices, not a bill**. Default prices cover
 current Claude models (dated in every report). A model with no price shows
 its tokens and `n/a`, never another model's price; `prompt-coach doctor`
