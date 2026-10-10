@@ -28,15 +28,13 @@ def env(tmp_path, monkeypatch):
     an isolated cache, and an unreachable LLM endpoint (degraded mode)."""
     hermes = tmp_path / "state.db"
     conn = sqlite3.connect(hermes)
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, started_at REAL,
             title TEXT, cwd TEXT, git_repo_root TEXT, model TEXT);
         CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT,
             content TEXT, timestamp REAL, active INTEGER DEFAULT 1,
             compacted INTEGER DEFAULT 0);
-        """
-    )
+        """)
     conn.execute("INSERT INTO sessions VALUES ('s1','cli',?, 'Fix nginx', '/p', '/p', NULL)", (T0,))
     conn.executemany(
         "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?,?,?,?)",
@@ -408,9 +406,10 @@ def test_setup_wizard_can_disable_a_normally_available_store(env):
 
 
 def test_setup_wizard_rejects_public_url_without_crashing(env):
-    # Position 5 (base URL) gets a public URL instead of accepting the
-    # default -- RemoteEndpointRefused must be caught, not propagate.
-    answers = "\n\n\n\nhttps://api.openai.com/v1\n\n\n\nn\nn\nn\n"
+    # Position 5 (base URL) gets a public URL, then model "m", then the
+    # "Allow that?" question is declined -- RemoteEndpointRefused must be
+    # caught, not propagate.
+    answers = "\n\n\n\nhttps://api.openai.com/v1\nm\nn\n\n\nn\nn\nn\n"
     result = runner.invoke(app, ["setup"], input=answers)
     assert result.exit_code == 0, result.output
     assert "refused" in result.output
@@ -419,6 +418,37 @@ def test_setup_wizard_rejects_public_url_without_crashing(env):
     config_path = env / "xdg-config" / "prompt-coach" / "config.toml"
     written = config_path.read_text()
     assert 'api_base = "https://api.openai.com/v1"' in written  # saved as typed, even if rejected
+
+
+def test_setup_wizard_public_url_can_be_allowed(env, monkeypatch):
+    # Any OpenAI-compatible endpoint works: a cloud URL is a yes/no in the
+    # wizard, which writes allow_remote, rather than a hand-edit.
+    monkeypatch.setattr("prompt_coach.llm.client.LocalLLM.available", lambda self: False)
+    answers = "\n\n\n\nhttps://api.example.com/v1\nm\ny\n\n\nn\nn\nn\n"
+    result = runner.invoke(app, ["setup"], input=answers)
+    assert result.exit_code == 0, result.output
+    assert "will be sent to it" in result.output
+    assert "refused" not in result.output
+    written = (env / "xdg-config" / "prompt-coach" / "config.toml").read_text()
+    assert "allow_remote = true" in written
+    assert 'model = "m"' in written
+
+
+def test_setup_wizard_blank_url_skips_llm(env, monkeypatch):
+    monkeypatch.delenv("PROMPT_COACH_API_BASE")
+    result = runner.invoke(app, ["setup"], input="\n" * 7 + "n\nn\nn\n")
+    assert result.exit_code == 0, result.output
+    assert "reachable" not in result.output
+    written = (env / "xdg-config" / "prompt-coach" / "config.toml").read_text()
+    assert 'api_base = ""' in written
+
+
+def test_report_without_llm_configured_runs_deterministic(env, monkeypatch):
+    monkeypatch.delenv("PROMPT_COACH_API_BASE")
+    result = runner.invoke(app, ["report"])
+    assert result.exit_code == 0, result.output
+    assert "No LLM endpoint configured" in result.output
+    assert "deterministic analysis only" in result.output
 
 
 def test_setup_wizard_dir_override_written(env):
@@ -765,5 +795,6 @@ def test_setup_wizard_preserves_settings_it_does_not_ask_about(env):
     assert result.exit_code == 0, result.output
     written = config_path.read_text()
     assert 'api_key_cmd = "echo k"' in written
-    assert "reasoning = false" in written
+    # Legacy `reasoning` is migrated to extra_body, not dropped.
+    assert '"reasoning": {"enabled": false}' in written
     assert "auto_rewrite = true" in written

@@ -20,6 +20,9 @@ def clean_env(monkeypatch):
         "PROMPT_COACH_API_KEY",
         "PROMPT_COACH_API_KEY_CMD",
         "PROMPT_COACH_REASONING",
+        "PROMPT_COACH_EXTRA_BODY",
+        "PROMPT_COACH_API_BASE",
+        "PROMPT_COACH_MODEL",
         "PROMPT_COACH_NUDGE_AUTO_REWRITE",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -137,7 +140,25 @@ def test_env_api_key_wins_over_api_key_cmd(clean_env, monkeypatch, tmp_path):
 
 
 def test_no_api_key_cmd_returns_plain_api_key(clean_env, tmp_path):
-    assert load_config(tmp_path / "nope.toml").llm.resolve_api_key() == "ollama"
+    path = tmp_path / "config.toml"
+    path.write_text('[llm]\napi_key = "plain"\n')
+    assert load_config(path).llm.resolve_api_key() == "plain"
+
+
+def test_no_endpoint_or_model_by_default(clean_env, tmp_path):
+    """No guessed endpoint (a LAN IP or a vendor): unset means the LLM
+    features are off until the user configures one."""
+    llm = load_config(tmp_path / "nope.toml").llm
+    assert (llm.base_url, llm.model, llm.api_key) == ("", "", "")
+    assert not llm.configured
+
+
+def test_configured_needs_both_endpoint_and_model(clean_env, tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[llm]\napi_base = "http://localhost:11434/v1"\n')
+    assert not load_config(path).llm.configured
+    path.write_text('[llm]\napi_base = "http://localhost:11434/v1"\nmodel = "m"\n')
+    assert load_config(path).llm.configured
 
 
 @pytest.mark.parametrize("cmd", ["exit 3", "true", "sleep 5"])
@@ -150,37 +171,53 @@ def test_api_key_cmd_failure_raises_without_leaking_output(clean_env, tmp_path, 
     assert "secret-ish" not in str(exc.value)
 
 
-def test_reasoning_defaults_to_unset(clean_env, tmp_path):
-    assert load_config(tmp_path / "nope.toml").llm.reasoning is None
+def test_extra_body_defaults_to_unset(clean_env, tmp_path):
+    assert load_config(tmp_path / "nope.toml").llm.extra_body is None
 
 
-def test_reasoning_from_toml_and_env(clean_env, monkeypatch, tmp_path):
+def test_extra_body_from_toml_and_env(clean_env, monkeypatch, tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("[llm]\nextra_body = '{\"top_k\": 20}'\n")
+    assert load_config(path).llm.extra_body == {"top_k": 20}
+    monkeypatch.setenv("PROMPT_COACH_EXTRA_BODY", '{"num_ctx": 32768}')
+    assert load_config(path).llm.extra_body == {"num_ctx": 32768}
+
+
+@pytest.mark.parametrize("raw", ["not json", "[1, 2]"])
+def test_extra_body_must_be_a_json_object(clean_env, tmp_path, raw):
+    path = tmp_path / "config.toml"
+    path.write_text(f"[llm]\nextra_body = '{raw}'\n")
+    with pytest.raises(ValueError, match="extra_body"):
+        load_config(path)
+
+
+def test_legacy_reasoning_maps_to_extra_body(clean_env, monkeypatch, tmp_path):
     path = tmp_path / "config.toml"
     path.write_text("[llm]\nreasoning = false\n")
-    assert load_config(path).llm.reasoning is False
+    assert load_config(path).llm.extra_body == {"reasoning": {"enabled": False}}
     monkeypatch.setenv("PROMPT_COACH_REASONING", "true")
-    assert load_config(path).llm.reasoning is True
+    assert load_config(path).llm.extra_body == {"reasoning": {"enabled": True}}
 
 
-def test_write_config_round_trips_api_key_cmd_and_reasoning(clean_env, tmp_path):
+def test_write_config_migrates_legacy_reasoning(clean_env, tmp_path):
     src = tmp_path / "config.toml"
-    src.write_text(
-        '[llm]\napi_key_cmd = "bws secret get \\"x\\" | jq -r .value"\nreasoning = false\n'
-    )
+    src.write_text('[llm]\napi_key_cmd = "pass show \\"x\\" | head -1"\nreasoning = false\n')
     cfg = load_config(src)
     out = tmp_path / "written.toml"
     write_config(cfg, out)
+    written = out.read_text()
+    assert "reasoning = " not in written
     reloaded = load_config(out)
     assert reloaded.llm.api_key_cmd == cfg.llm.api_key_cmd
-    assert reloaded.llm.reasoning is False
+    assert reloaded.llm.extra_body == {"reasoning": {"enabled": False}}
 
 
-def test_write_config_omits_unset_api_key_cmd_and_reasoning(clean_env, tmp_path):
+def test_write_config_omits_unset_api_key_cmd_and_extra_body(clean_env, tmp_path):
     out = tmp_path / "written.toml"
     write_config(load_config(tmp_path / "nope.toml"), out)
     text = out.read_text()
     assert "api_key_cmd" not in text
-    assert "reasoning" not in text
+    assert "extra_body" not in text
 
 
 def test_auto_rewrite_defaults_off_and_reads_toml_and_env(clean_env, monkeypatch, tmp_path):

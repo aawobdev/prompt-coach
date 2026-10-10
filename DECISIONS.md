@@ -1,5 +1,47 @@
 # Decisions & Changes - prompt-coach
 
+## 2026-10-10 - Open-source prep: no default endpoint, extra_body, MIT
+
+**Trigger**: preparing the repo to go public. An inventory found no secrets
+in any of the 64 commits (gitleaks) and no file ever deleted from history,
+so a cleanup commit is enough and no history rewrite is needed. It did find
+defaults that only worked on the maintainer's machines.
+
+**Decision**: make the tool harness- and model-agnostic.
+- **No default LLM endpoint or model.** The old default was a LAN IP
+  (`192.168.1.123:11434`) and a locally derived Ollama tag. On anyone else's
+  machine that IP is an arbitrary device on their network. Unset now means
+  deterministic-only: `make_llm` prints a one-line "run setup" note and
+  returns None, nudge falls back to its tip, and no request is made.
+  `LLMConfig.configured` is the single check.
+- **`[llm] extra_body` (JSON) replaces `reasoning`.** `reasoning = false`
+  hard-coded OpenRouter's request field. Any provider-specific field now
+  goes through a generic passthrough. The legacy key still loads (mapped to
+  `{"reasoning": {"enabled": ...}}`) and `write_config` saves it in the new
+  form, so existing configs migrate on the next `setup` with no change in
+  behaviour.
+- **`setup` asks before allowing a remote endpoint** and writes
+  `allow_remote`, instead of requiring a hand-edit. The guard itself is
+  unchanged: a non-private URL is still refused unless allowed.
+- **README leads with sources as equal, auto-detected readers**, with JSON
+  import documented as the route for any other tool. Hermes and the Claude
+  Code plugin are optional integrations, not the headline.
+- Copilot discovery also probes macOS and native Windows VS Code paths
+  (unverified against live files; the README says so).
+- MIT licence, package metadata, CONTRIBUTING/SECURITY, Dependabot. black
+  26 and pytest 9 clear the two dev-dependency CVEs (CVE-2026-32274,
+  CVE-2025-71176); SECURITY-REMEDIATION.md is removed as applied.
+- Personal details scrubbed from tests and docs (names, home paths, a
+  real-looking prompt, the LAN IP). Historical docs keep the maintainer's
+  name in "Decided by" lines: that is authorship, not private data.
+
+**Rejected**: defaulting to `http://localhost:11434/v1`. It looks neutral but
+still privileges one server, and a user without Ollama would hit a timeout
+on every LLM call instead of a clear "not configured".
+
+**Affects**: config.py, llm/client.py, cli.py (`make_llm`, `setup`),
+nudge.py, stores/copilot.py, report template, README, AGENTS.md, pyproject.
+
 ## 2026-08-17 - Web dashboard: reuse the terminal renderable, no web framework
 
 **Trigger**: pick-up item 9 (local web UI) / phase-3 "serve API". Alistair:
@@ -101,7 +143,7 @@ prompt history to OpenRouter via the gateway's fallback routing, breaking the
 product's core privacy promise.
 **Decision**: LocalLLM refuses any base URL that is not localhost or RFC1918
 unless `allow_remote = true` is explicitly set in config. Default endpoint is
-direct desktop Ollama (192.168.1.123:11434, plain HTTP on the LAN, accepted
+direct desktop Ollama (<lan-host>:11434, plain HTTP on the LAN, accepted
 knowingly). No cloud keys in config. Deterministic-only degraded mode is
 first-class (the desktop GPU is frequently off; it was off during design).
 **Why**: the privacy moat is the product; it must be enforced in code, not
@@ -231,7 +273,7 @@ the derived tag is already the roster standard on this host.
 **Trigger**: after the live-LLM smoke, Alistair flagged that the actual
 gap is CLI agent harnesses ("more codex than chatgpt... this is more about
 cli agent harnesses etc for now"). Checked the filesystem: a real
-`/mnt/c/Users/Alistair/.codex/sessions/` directory exists with one genuine
+`/mnt/c/Users/<user>/.codex/sessions/` directory exists with one genuine
 session (VS Code extension, Oct 2025), confirming Codex CLI is an actual
 source worth reading, unlike the ChatGPT web export which has no local
 store at all and needs a manually-provided ZIP that doesn't exist yet.
@@ -767,7 +809,7 @@ first-guess thresholds now that real data exists to check them against.
 **Decision/findings**:
 - Re-enabled the Claude Code hook in `~/.claude/settings.json`
   (UserPromptSubmit 25s, Stop 10s), pointed at the installed
-  `/home/alistair/.local/bin/prompt-coach nudge` rather than `uv run
+  `~/.local/bin/prompt-coach nudge` rather than `uv run
   --project ...` -- the ~15-20% faster path found during the 2026-07-29
   latency investigation. Verified the exact configured command against a
   synthetic payload before considering it live.
@@ -1328,8 +1370,8 @@ silently fell back to tips. Alistair asked for a cheap cloud model instead.
 opt in; the default stays local-only. Two new `[llm]` keys:
 - `api_key_cmd`: a shell command that prints the key, run only when an LLM
   client is built (every hook loads config, so never at load). The key never
-  touches disk. Alistair's points at a bws secret
-  (`PROMPT_COACH_OPENROUTER_API_KEY`, a dedicated OpenRouter key capped at $5).
+  touches disk. Alistair's points at a secrets-manager entry holding a
+  dedicated, spend-capped OpenRouter key.
 - `reasoning = false`: DeepSeek v4 flash spent its whole 800-token budget
   reasoning and returned no content (26 s, past the 20 s hook timeout).
   With it off: v4-flash 3.6-9.3 s, v4.1-flash 0.7-2.9 s. Chosen model:

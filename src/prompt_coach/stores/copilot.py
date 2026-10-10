@@ -8,8 +8,9 @@ carry new prompts, so byte-offset resume over the append-only file is valid.
 The session id equals the filename stem, so resumed parses never need to
 re-read the kind-0 line.
 
-On WSL the Windows VS Code profile is read directly via /mnt/c; a native
-Linux profile is probed as a fallback.
+On WSL the Windows VS Code profile is read directly via /mnt/c; native
+Linux, macOS and Windows profiles are probed as fallbacks. Only the WSL and
+Linux layouts have been verified against live files.
 
 Model capture (2026-07-29): each request carries its own `modelId`
 (`copilot/claude-haiku-4.5`, `ollama/Ollama/devstral-24b:latest`, etc.),
@@ -37,7 +38,12 @@ def default_candidates() -> list[Path]:
         for p in sorted(Path("/mnt/c/Users").glob("*"))
         if p.name not in ("Public", "Default", "Default User", "All Users")
     ]
-    candidates.append(Path("~/.config/Code/User/workspaceStorage").expanduser())
+    home = Path.home()
+    candidates += [
+        home / ".config/Code/User/workspaceStorage",  # Linux
+        home / "Library/Application Support/Code/User/workspaceStorage",  # macOS
+        home / "AppData/Roaming/Code/User/workspaceStorage",  # native Windows
+    ]
     return candidates
 
 

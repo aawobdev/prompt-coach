@@ -132,6 +132,13 @@ def make_llm(cfg: Config) -> LocalLLM | None:
     from prompt_coach.config import APIKeyCommandFailed
     from prompt_coach.llm.client import LocalLLM, RemoteEndpointRefused
 
+    if not cfg.llm.configured:
+        typer.echo(
+            "No LLM endpoint configured: deterministic analysis only."
+            " Run `prompt-coach setup` to add one.",
+            err=True,
+        )
+        return None
     try:
         api_key = cfg.llm.resolve_api_key()
     except APIKeyCommandFailed as exc:
@@ -144,7 +151,7 @@ def make_llm(cfg: Config) -> LocalLLM | None:
             api_key=api_key,
             timeout=cfg.llm.timeout,
             allow_remote=cfg.llm.allow_remote,
-            reasoning=cfg.llm.reasoning,
+            extra_body=cfg.llm.extra_body,
         )
     except RemoteEndpointRefused as exc:
         typer.echo(f"Refusing remote endpoint: {exc}", err=True)
@@ -464,7 +471,7 @@ def _setup_wizard():
         config_file_path,
         write_config,
     )
-    from prompt_coach.llm.client import LocalLLM, RemoteEndpointRefused
+    from prompt_coach.llm.client import LocalLLM, RemoteEndpointRefused, is_private_host
     from prompt_coach.stores.claude_code import ClaudeCodeStore
     from prompt_coach.stores.codex_cli import CodexStore
     from prompt_coach.stores.copilot import CopilotStore
@@ -491,22 +498,41 @@ def _setup_wizard():
         if typer.confirm(f"  {kind} -- {detail}. Enable?", default=info.available and was_enabled):
             enabled.add(kind)
 
-    typer.echo("\nLLM endpoint (local-only; a public URL needs allow_remote set by hand):")
-    base_url = typer.prompt("  base URL", default=cfg.llm.base_url)
-    model = typer.prompt("  model", default=cfg.llm.model)
-    try:
-        probe = LocalLLM(
-            base_url,
-            model,
-            api_key=cfg.llm.resolve_api_key(),
-            timeout=2.0,
-            allow_remote=cfg.llm.allow_remote,
-        )
-        reachable = probe.available()
-    except (RemoteEndpointRefused, APIKeyCommandFailed) as exc:
-        typer.echo(f"  refused: {exc}", err=True)
-        reachable = False
-    typer.echo(f"  -> {'reachable now' if reachable else 'not reachable right now'}")
+    typer.echo(
+        "\nLLM endpoint: any OpenAI-compatible API (Ollama, LM Studio, llama.cpp,"
+        " vLLM, a cloud provider).\nLeave the base URL blank to run deterministic-only."
+    )
+    base_url = typer.prompt(
+        "  base URL (e.g. http://localhost:11434/v1)", default=cfg.llm.base_url
+    ).strip()
+    model = cfg.llm.model
+    allow_remote = cfg.llm.allow_remote
+    if base_url:
+        model = typer.prompt("  model", default=cfg.llm.model).strip()
+        if not is_private_host(base_url):
+            typer.echo(
+                f"  {base_url} is not on this machine or your LAN: every prompt"
+                " prompt-coach analyses or rewrites will be sent to it."
+            )
+            allow_remote = typer.confirm("  Allow that?", default=allow_remote)
+        try:
+            probe = LocalLLM(
+                base_url,
+                model,
+                api_key=cfg.llm.resolve_api_key(),
+                timeout=2.0,
+                allow_remote=allow_remote,
+            )
+            reachable = probe.available()
+        except (RemoteEndpointRefused, APIKeyCommandFailed) as exc:
+            typer.echo(f"  refused: {exc}", err=True)
+            reachable = False
+        typer.echo(f"  -> {'reachable now' if reachable else 'not reachable right now'}")
+        if not cfg.llm.api_key and not cfg.llm.api_key_cmd:
+            typer.echo(
+                "  Needs an API key? Set api_key_cmd in config.toml to a command that"
+                " prints it (keeps the key out of the file)."
+            )
 
     nudge_mode = typer.prompt(f"\nNudge mode ({'/'.join(NUDGE_MODES)})", default=cfg.nudge.mode)
     while nudge_mode not in NUDGE_MODES:
@@ -530,7 +556,7 @@ def _setup_wizard():
         dir_overrides[here] = override_mode
 
     new_cfg = Config(
-        llm=dataclasses.replace(cfg.llm, base_url=base_url, model=model),
+        llm=dataclasses.replace(cfg.llm, base_url=base_url, model=model, allow_remote=allow_remote),
         stores=StoresConfig(
             hermes_db=cfg.stores.hermes_db,
             claude_projects_dir=cfg.stores.claude_projects_dir,

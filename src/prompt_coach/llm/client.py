@@ -1,9 +1,10 @@
-"""Local LLM client. The privacy guarantee is enforced here, not just documented.
+"""Client for any OpenAI-compatible endpoint. The privacy guarantee is
+enforced here, not just documented.
 
 The constructor refuses any base URL that does not resolve to a loopback or
-private (RFC1918) host unless allow_remote=True is passed explicitly. This
-exists because the llm-api gateway can silently fall back to cloud providers:
-pointing prompt-coach at a non-local endpoint must be a deliberate act.
+private (RFC1918) host unless allow_remote=True is passed explicitly. A
+gateway can silently fall back to cloud providers, and a cloud endpoint sees
+every prompt sent to it: pointing prompt-coach off-machine must be deliberate.
 """
 
 from __future__ import annotations
@@ -18,14 +19,14 @@ import openai
 
 
 class LLMUnavailable(RuntimeError):
-    """The local model cannot be reached or will not produce valid output."""
+    """The model cannot be reached or will not produce valid output."""
 
 
 class RemoteEndpointRefused(ValueError):
     """Base URL is not local/private and allow_remote was not set."""
 
 
-def _is_private_host(base_url: str) -> bool:
+def is_private_host(base_url: str) -> bool:
     host = urlparse(base_url).hostname or ""
     if host in ("localhost", "host.docker.internal") or host.endswith(".local"):
         return True
@@ -40,24 +41,24 @@ class LocalLLM:
         self,
         base_url: str,
         model: str,
-        api_key: str = "ollama",
+        api_key: str = "",
         timeout: float = 120.0,
         allow_remote: bool = False,
-        reasoning: bool | None = None,
+        extra_body: dict | None = None,
     ):
-        if not allow_remote and not _is_private_host(base_url):
+        if not allow_remote and not is_private_host(base_url):
             raise RemoteEndpointRefused(
                 f"{base_url} is not a local/private endpoint. Prompt content never"
-                " leaves the machine unless you set allow_remote = true in config,"
-                " and you should only do that for a gateway pinned to local routing."
+                " leaves the machine unless you set allow_remote = true in config."
             )
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
-        # Sent only when set: see LLMConfig.reasoning.
-        self._extra_body = None if reasoning is None else {"reasoning": {"enabled": reasoning}}
+        # Sent only when set: see LLMConfig.extra_body.
+        self._extra_body = extra_body or None
+        # The SDK rejects an empty key; local servers ignore whatever is sent.
         self._client = openai.OpenAI(
-            base_url=self.base_url, api_key=api_key, timeout=timeout, max_retries=1
+            base_url=self.base_url, api_key=api_key or "none", timeout=timeout, max_retries=1
         )
 
     def available(self) -> bool:
@@ -92,7 +93,7 @@ class LocalLLM:
                     extra_body=self._extra_body,
                 )
             except openai.OpenAIError as exc:
-                raise LLMUnavailable(f"local model call failed: {type(exc).__name__}") from exc
+                raise LLMUnavailable(f"model call failed: {type(exc).__name__}") from exc
             text = resp.choices[0].message.content or ""
             try:
                 return _extract_json(text)

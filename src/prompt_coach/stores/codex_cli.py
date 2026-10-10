@@ -13,8 +13,8 @@ boilerplate. No per-message id exists in the format, so message_ref falls
 back to a content hash like the Copilot store. One file per session
 (filename stem is a uuid), append-only, so byte-offset resume is valid.
 
-On WSL the Windows profile is read directly via /mnt/c; a native Linux
-profile is probed as a fallback.
+On WSL the Windows profile is read directly via /mnt/c; the native
+`~/.codex` (Linux, macOS, Windows) is probed as a fallback.
 
 Model capture (2026-07-29): `type=turn_context` lines carry `payload.model`
 and, confirmed live, appear right AFTER the `user_message` event for that

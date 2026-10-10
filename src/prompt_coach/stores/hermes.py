@@ -113,7 +113,7 @@ def unwrap(content: str) -> tuple[str, list[str], bool]:
 def _owner(conn: sqlite3.Connection) -> str | None:
     """The dominant Slack speaker label: whose prompts these are.
 
-    Other labels ("[Jamie]" in a shared channel) are someone else typing.
+    Other labels ("[robin]" in a shared channel) are someone else typing.
     Counted over every row, not the sync window, so an incremental sync
     can't flip the owner.
     """

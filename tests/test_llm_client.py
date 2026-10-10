@@ -12,7 +12,7 @@ from prompt_coach.llm.client import (
     _extract_json,
 )
 
-BASE = "http://192.168.1.123:11434/v1"
+BASE = "http://192.168.1.10:11434/v1"
 
 
 def completion(payload: str) -> dict:
@@ -37,7 +37,7 @@ class TestGuard:
         [
             "http://localhost:8080/v1",
             "http://127.0.0.1:11434/v1",
-            "http://192.168.1.123:11434/v1",
+            "http://192.168.1.10:11434/v1",
             "http://10.0.0.5:11434/v1",
             "http://al.desk.local:11434/v1",
         ],
@@ -137,10 +137,11 @@ class TestTemplates:
         assert tpl.QUERY_ANSWER_VERSION.startswith("query-answer.")
 
 
-class TestReasoning:
-    """DeepSeek v4 flash spent its whole 800-token budget reasoning and
-    returned no content (measured 2026-09-27), so reasoning must be
-    switchable off per endpoint -- and never sent when unset (Ollama)."""
+class TestExtraBody:
+    """Provider-specific request fields (e.g. OpenRouter's reasoning switch:
+    DeepSeek v4 flash spent its whole 800-token budget reasoning and returned
+    no content, measured 2026-09-27) go through extra_body -- and nothing
+    extra is sent when it is unset."""
 
     def _sent_body(self, route):
         import json
@@ -148,15 +149,15 @@ class TestReasoning:
         return json.loads(route.calls.last.request.content)
 
     @respx.mock
-    def test_reasoning_false_sends_disabled(self):
+    def test_extra_body_is_merged_into_request(self):
         route = respx.post(f"{BASE}/chat/completions").mock(
             return_value=httpx.Response(200, json=completion('{"a": 1}'))
         )
-        LocalLLM(BASE, "m", reasoning=False).complete_json("s", "u")
+        LocalLLM(BASE, "m", extra_body={"reasoning": {"enabled": False}}).complete_json("s", "u")
         assert self._sent_body(route)["reasoning"] == {"enabled": False}
 
     @respx.mock
-    def test_reasoning_unset_sends_nothing(self):
+    def test_extra_body_unset_sends_nothing_extra(self):
         route = respx.post(f"{BASE}/chat/completions").mock(
             return_value=httpx.Response(200, json=completion('{"a": 1}'))
         )

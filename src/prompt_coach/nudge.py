@@ -299,6 +299,8 @@ def _make_llm(cfg: Config) -> LocalLLM | None:
     from prompt_coach.config import APIKeyCommandFailed
     from prompt_coach.llm.client import LocalLLM, RemoteEndpointRefused
 
+    if not cfg.llm.configured:
+        return None
     try:
         llm = LocalLLM(
             cfg.llm.base_url,
@@ -306,7 +308,7 @@ def _make_llm(cfg: Config) -> LocalLLM | None:
             api_key=cfg.llm.resolve_api_key(),
             timeout=cfg.nudge.llm_timeout,
             allow_remote=cfg.llm.allow_remote,
-            reasoning=cfg.llm.reasoning,
+            extra_body=cfg.llm.extra_body,
         )
     except (RemoteEndpointRefused, APIKeyCommandFailed):
         return None

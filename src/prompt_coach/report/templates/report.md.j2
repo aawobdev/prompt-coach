@@ -1,8 +1,9 @@
 # Prompt Coach Report - {{ data.generated_at.strftime('%Y-%m-%d') }}
 
 {% if not data.llm_available -%}
-> **LLM unavailable - deterministic analysis only.** The local model at the
-> configured endpoint could not be reached, so rubric judgement scores
+> **LLM unavailable - deterministic analysis only.** No LLM endpoint is
+> configured (`prompt-coach setup`), or the configured one could not be
+> reached, so rubric judgement scores
 > (A1/A2/A3/A8) and pattern insights are absent from this report. Metrics and
 > structural rubric checks below cover the full corpus.
 {% endif -%}

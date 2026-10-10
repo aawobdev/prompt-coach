@@ -287,9 +287,9 @@ class TestScorePrompt:
         score = score_prompt(text)
         assert score >= 55, f"Expected >= 55, got {score}"
 
-    def test_backblaze_rewrite_scores_well(self):
+    def test_billing_rewrite_scores_well(self):
         text = (
-            "Check my Backblaze email at wobdev inbox. I need:\n"
+            "Check the billing emails from my storage provider. I need:\n"
             "- Any invoices due in the next 30 days\n"
             "- Any expired/cancelled items\n"
             "- Any storage overage warnings\n\n"
@@ -408,7 +408,7 @@ class TestLengthRules:
 
     def test_bare_paste_leftovers_are_not_detail(self):
         # A PowerShell banner survives authored_text as ~65 chars (real data).
-        banner = "PowerShell 7.6.5 Loaded BWS_ACCESS_TOKEN -> $env:BWS_ACCESS_TOKEN\n"
+        banner = "PowerShell 7.6.5 Loaded VAULT_ACCESS_TOKEN -> $env:VAULT_ACCESS_TOKEN\n"
         text = banner + TRACEBACK * 3
         assert len(authored_text(text)) >= 50
         assert is_bare_paste(text)
@@ -549,7 +549,7 @@ class TestPastedSessionsAndChats:
         assert authored_text(text).strip().endswith("What does that remark mean for me?")
 
     def test_unix_prompt_session(self):
-        text = "alistair@dev:~$ git status\nOn branch main\nnothing to commit"
+        text = "user@dev:~$ git status\nOn branch main\nnothing to commit"
         assert authored_text(text).strip() == ""
         assert is_bare_paste(text + "\n" + "working tree clean and everything is fine " * 3)
 
@@ -559,7 +559,7 @@ class TestPastedSessionsAndChats:
         assert not has_sections(text)
 
     def test_whatsapp_export_is_not_authored(self):
-        text = "Rough numbers below.\n[19:21, 17/09/2026] Alistair: Design: 3 days\nBuild: 5 days"
+        text = "Rough numbers below.\n[19:21, 17/09/2026] Sam: Design: 3 days\nBuild: 5 days"
         assert authored_text(text).strip() == "Rough numbers below."
 
     def test_powershell_prompt_pasted_mid_line_after_typed_text(self):

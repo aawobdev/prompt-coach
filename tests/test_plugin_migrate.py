@@ -41,7 +41,7 @@ PLUGIN_HOOK = {
 }
 LEGACY_HOOK = {
     "type": "command",
-    "command": "/home/alistair/.local/bin/prompt-coach nudge",
+    "command": "/home/x/.local/bin/prompt-coach nudge",
     "timeout": 25,
 }
 
