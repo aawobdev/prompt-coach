@@ -182,6 +182,104 @@ def test_no_matching_assistant_reply_leaves_model_none(tmp_path):
     assert results[0].model is None
 
 
+def attachment_line(uuid, parent_uuid):
+    return json.dumps(
+        {
+            "type": "attachment",
+            "uuid": uuid,
+            "parentUuid": parent_uuid,
+            "attachment": {"type": "hook_additional_context"},
+            "sessionId": "sess-1",
+        }
+    )
+
+
+def _transcript(tmp_path, *lines):
+    proj = tmp_path / "projects" / "-home-x-proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    f = proj / "sess.jsonl"
+    f.write_text("".join(x + "\n" for x in lines))
+    return f
+
+
+def test_model_linked_through_attachment_lines(tmp_path):
+    """2026-10-10: attachments sit between prompt and reply, and the reply's
+    parentUuid points at the last one (2,167 of 2,171 real prompts)."""
+    f = _transcript(
+        tmp_path,
+        line(uuid="u-1"),
+        json.dumps({"type": "file-history-snapshot", "messageId": "x"}),
+        attachment_line("at-1", "u-1"),
+        attachment_line("at-2", "at-1"),
+        attachment_line("at-3", "at-2"),
+        assistant_line("at-3", "claude-opus-5-5"),
+    )
+    [(_, prompt)] = list(ClaudeCodeStore(tmp_path / "projects").iter_file(f))
+    assert prompt.model == "claude-opus-5-5"
+
+
+def test_unrelated_branch_does_not_join_the_chain(tmp_path):
+    f = _transcript(
+        tmp_path,
+        line(uuid="u-1"),
+        attachment_line("at-other", "some-other-uuid"),
+        assistant_line("at-other", "claude-opus-4-8"),
+    )
+    [(_, prompt)] = list(ClaudeCodeStore(tmp_path / "projects").iter_file(f))
+    assert prompt.model is None
+
+
+def test_chain_resets_at_the_next_prompt(tmp_path):
+    f = _transcript(
+        tmp_path,
+        line(uuid="u-1"),
+        attachment_line("at-1", "u-1"),
+        line(uuid="u-2", timestamp="2026-06-22T21:40:00.000Z"),
+        assistant_line("at-1", "claude-opus-4-8"),  # late reply to the old chain
+        attachment_line("at-2", "u-2"),
+        assistant_line("at-2", "claude-sonnet-5"),
+    )
+    models = [p.model for _, p in ClaudeCodeStore(tmp_path / "projects").iter_file(f)]
+    assert models == [None, "claude-sonnet-5"]
+
+
+def test_linked_prompt_keeps_its_own_offset(tmp_path):
+    first = line(uuid="u-1")
+    f = _transcript(tmp_path, first, attachment_line("at-1", "u-1"), assistant_line("at-1", "m"))
+    [(offset, _)] = list(ClaudeCodeStore(tmp_path / "projects").iter_file(f))
+    assert offset == len(first) + 1
+
+
+def test_reparse_fills_models_in_place_and_keeps_expired_rows(tmp_path):
+    """Claude Code deletes old transcripts, so a parser bump must never purge
+    its cached prompts: rows whose files are gone stay, the rest gain models."""
+    import dataclasses
+
+    from prompt_coach.cache import CacheDB
+    from prompt_coach.models import SyncStats
+
+    f = _transcript(
+        tmp_path, line(uuid="u-1"), attachment_line("at-1", "u-1"), assistant_line("at-1", "m-1")
+    )
+    cache = CacheDB(tmp_path / "cache.db")
+    # What the old parser cached: u-1 without a model, plus a prompt whose
+    # transcript has since been deleted.
+    expired = parse_line(line(uuid="u-old", sessionId="gone", timestamp="2026-06-01T10:00:00Z"))
+    stale = dataclasses.replace(parse_line(line(uuid="u-1")), model=None)
+    for prompt in (expired, stale):
+        cache._insert(prompt, SyncStats())
+    cache.conn.execute("INSERT OR REPLACE INTO file_state VALUES ('parser:claude-code', 0, 0, 1)")
+    st = f.stat()  # the file looks unchanged: only the version bump can force a re-read
+    cache.conn.execute(
+        "INSERT OR REPLACE INTO file_state VALUES (?,?,?,?)",
+        (str(f), st.st_mtime, st.st_size, st.st_size),
+    )
+    cache.conn.commit()
+    cache.sync([ClaudeCodeStore(tmp_path / "projects")], usage=False)
+    rows = dict(cache.conn.execute("SELECT message_ref, model FROM prompts").fetchall())
+    assert rows == {"u-old": None, "u-1": "m-1"}
+
+
 def test_malformed_line_skipped():
     assert parse_line("{not json") is None
     assert parse_line("") is None

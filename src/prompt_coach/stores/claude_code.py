@@ -28,6 +28,14 @@ flushed (with model=None if nothing matched). `<synthetic>` is a
 placeholder value Claude Code emits for some internal turns, not a real
 model, and is filtered out at the source.
 
+Reply linking (2026-10-10): Claude Code now writes `type: "attachment"`
+lines (hook output, context) between a prompt and its reply, and the
+reply's parentUuid points at the last of them. Linking on the direct
+parent matched 4 of 2,171 recent prompts; every other reply was reachable
+through the parentUuid chain. iter_file now follows that chain: any line
+whose parent is the pending prompt or one of its descendants joins it,
+and the first assistant line whose parent is in the chain is the reply.
+
 Usage (2026-10-10): every `type: "assistant"` line carries `message.usage`,
 but a streamed reply is written several times with the same `requestId`
 (51% of 137k usage lines on the maintainer's machine). Usage is keyed by
@@ -173,23 +181,31 @@ def parse_usage_line(line: str, *, in_subagent_file: bool = False) -> UsageRecor
     )
 
 
-def _assistant_model_for(line: str, want_parent_uuid: str) -> str | None:
-    """None unless `line` is the assistant reply to `want_parent_uuid`
-    carrying a real model name (not the `<synthetic>` placeholder)."""
+def _link_fields(line: str) -> tuple[str | None, str | None, str | None, str | None]:
+    """(type, uuid, parentUuid, model) of a transcript line, or Nones. The
+    model is only returned for assistant lines carrying a real one."""
+    if '"parentUuid"' not in line:
+        return None, None, None, None
     try:
         obj = json.loads(line)
     except json.JSONDecodeError:
-        return None
-    if not isinstance(obj, dict) or obj.get("type") != "assistant":
-        return None
-    if obj.get("parentUuid") != want_parent_uuid:
-        return None
-    model = (obj.get("message") or {}).get("model")
-    return model if isinstance(model, str) and model != "<synthetic>" else None
+        return None, None, None, None
+    if not isinstance(obj, dict):
+        return None, None, None, None
+    kind = obj.get("type")
+    model = (obj.get("message") or {}).get("model") if kind == "assistant" else None
+    if not isinstance(model, str) or model == "<synthetic>":
+        model = None
+    return kind, obj.get("uuid"), obj.get("parentUuid"), model
 
 
 class ClaudeCodeStore:
     kind = SourceKind.CLAUDE_CODE
+    # 2: reply linking follows the parentUuid chain. Never purge on a bump:
+    # Claude Code deletes transcripts after ~30 days, so the cache holds
+    # prompts whose files are gone. The re-read fills fields in place.
+    parser_version = 2
+    purge_on_reparse = False
 
     def __init__(self, projects_dir: Path | None = None):
         self.projects_dir = (projects_dir or Path("~/.claude/projects")).expanduser()
@@ -222,6 +238,7 @@ class ClaudeCodeStore:
         it gets flushed) so resume semantics are unchanged.
         """
         pending: tuple[int, Prompt] | None = None
+        chain: set[str] = set()  # the pending prompt's uuid and its descendants
         with open(path, "rb") as f:
             if from_offset:
                 f.seek(from_offset)
@@ -234,12 +251,18 @@ class ClaudeCodeStore:
                     if pending is not None:
                         yield pending
                     pending = (offset, prompt)
+                    chain = {prompt.message_ref}
                     continue
-                if pending is not None:
-                    model = _assistant_model_for(text, pending[1].message_ref)
-                    if model is not None:
-                        yield pending[0], dataclasses.replace(pending[1], model=model)
-                        pending = None
+                if pending is None:
+                    continue
+                kind, uuid, parent, model = _link_fields(text)
+                if parent not in chain:
+                    continue
+                if kind == "assistant" and model is not None:
+                    yield pending[0], dataclasses.replace(pending[1], model=model)
+                    pending, chain = None, set()
+                elif uuid:
+                    chain.add(uuid)
             if pending is not None:
                 yield pending
 

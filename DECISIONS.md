@@ -1,5 +1,36 @@
 # Decisions & Changes - prompt-coach
 
+## 2026-10-10 - Claude Code: link prompts to replies through the parentUuid chain
+
+**Trigger**: building cost rule A14 showed only 427 of 6,372 cached Claude
+Code prompts (7%) had a model, starving Model Fit.
+
+**Cause**: Claude Code now writes `type: "attachment"` lines (hook output,
+context) between a prompt and its reply, and the reply's `parentUuid`
+points at the last attachment. The reader matched only the direct parent:
+4 of 2,171 recent prompts linked; 2,167 were reachable through the chain.
+
+**Decision**: `iter_file` follows the chain. Lines whose parent is the
+pending prompt or one of its descendants join the chain; the first
+assistant line whose parent is in it is the reply. The chain resets at the
+next prompt, so a late reply never attaches to the wrong turn.
+
+**No purge on the parser bump.** `parser_version` normally purges a store's
+rows and re-reads them, but Claude Code deletes transcripts after ~30 days
+and the cache holds prompts back to 2026-08-11 while the oldest transcript
+left is 2026-08-16. `ClaudeCodeStore.purge_on_reparse = False`: the version
+bump forces a re-read, and `_insert` fills `model` in place where it was
+NULL. Rows whose files are gone are kept.
+
+**Measured on a copy of the real cache**: prompts with a model 427 -> 6,348
+of 6,373 (7% -> 100%), no rows lost; Model Fit coverage 143 -> 2,681
+prompts, mismatches 49 -> 1,077. One-off re-read: 6.1 s.
+
+A14's fill from usage records (`session_rules._with_models`) stays as a
+fallback for prompts whose transcripts are gone.
+
+**Affects**: stores/claude_code.py, cache.py (`_parser_changed`, `_insert`).
+
 ## 2026-10-10 - Cost layer, part 3: opt-in session-size warning in nudge
 
 **Decisions**:
