@@ -42,7 +42,8 @@ Open:
   5. Repeat `cost` run under 5 s.
   6. Copilot CLI: check `events.jsonl` matches the assumed shape
      (stores/copilot_cli.py docstring), especially `requests.count`.
-- Set `[cost] currency/usd_rate/billed_fraction` in your own config.
+- ~~Set `[cost]` in your own config~~: done on dev 2026-10-11 (currency,
+  rate and billed fraction set; `[nudge] cost_warning` on, verified live).
 - Local Ollama models show as unpriced; add zero prices to silence them.
 
 ## Public (2026-10-10)
