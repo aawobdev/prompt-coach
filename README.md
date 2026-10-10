@@ -73,6 +73,10 @@ uv run prompt-coach score "your prompt"  # score one prompt
 uv run prompt-coach query "what did I work on last week?"
 ```
 
+<p align="center">
+  <img src="docs/screenshots/score.svg" alt="prompt-coach score on a vague prompt (40/100) and a specific one (90/100), with the bonuses and penalties behind each" width="820">
+</p>
+
 ## Choosing a model
 
 Any server that speaks the OpenAI chat-completions API works. Run
