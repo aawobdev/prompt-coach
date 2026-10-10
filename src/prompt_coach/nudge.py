@@ -87,9 +87,9 @@ from prompt_coach.streaks import record_prompt
 if TYPE_CHECKING:  # never imported at runtime -- see the note below
     from prompt_coach.llm.client import LocalLLM
 
-# llm.client is NOT imported at module scope: it pulls in the `openai` SDK,
-# whose own type surface (Assistants/Threads/Batches/Evals APIs we never
-# use) costs ~700-900ms to import alone (measured 2026-07-29). This module
+# llm.client is NOT imported at module scope: it pulls in httpx, ~230ms to
+# import (measured 2026-10-10; ~700-900ms back when it was the `openai` SDK,
+# 2026-07-29). This module
 # runs synchronously on every Claude Code prompt submission (see the module
 # docstring), so paying that tax when mode is "off" or no trigger fired --
 # the common case -- would be a real, constant per-prompt delay for no

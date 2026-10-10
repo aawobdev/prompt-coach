@@ -1,5 +1,39 @@
 # Decisions & Changes - prompt-coach
 
+## 2026-10-10 - Drop the openai SDK: one plain httpx POST
+
+**Trigger**: Dependabot PR #28 (openai 1.109 -> 3.x). openai 3 swaps httpx
+for a separate `httpx2`/`httpcore2` stack: respx can't mock it (4 client
+tests failed with real connection attempts) and `import openai` rose from
+~434 ms to ~671 ms. That import runs inside the nudge hook on every prompt
+it rewrites.
+
+**Decision**: `LocalLLM` makes the one request it needs with httpx (already a
+dependency, used for the `available()` probe) and `openai` is removed. Same
+behaviour where it matters: Bearer auth (now only sent when a key is set),
+`extra_body` merged into the body, one retry on a dropped connection or
+408/409/429/5xx with a 0.5 s pause, every failure mapped to LLMUnavailable.
+Two deliberate differences from the SDK:
+- Timeouts are not retried. The attempt already used the caller's whole
+  budget; retrying a 20 s nudge timeout would overrun the 25 s hook.
+- `extra_body` can add fields but cannot replace `model`, `messages`,
+  `temperature` or `max_tokens`.
+Error messages carry the status or exception type only, never the response
+body, which may echo the prompt.
+
+**Measured**: `import prompt_coach.llm.client` ~677 ms -> ~235 ms (httpx is
+most of what's left, so the lazy imports in cli.py/nudge.py stay and
+test_import_hygiene now guards llm.client/httpx instead of openai). Five
+packages leave the lockfile (openai, jiter, distro, tqdm, sniffio).
+Live against the configured OpenRouter/DeepSeek endpoint: JSON call 1.1 s,
+rewrite 1.5 s, real `nudge` hook block-with-rewrite 2.1 s end to end.
+
+**Rejected**: openai 3 (above), and staying on openai <2 indefinitely (the
+dependency only ever served one request shape).
+
+**Affects**: llm/client.py, pyproject.toml, uv.lock, cli.py and nudge.py
+comments, tests/test_llm_client.py, tests/test_import_hygiene.py.
+
 ## 2026-10-10 - Open-source prep: no default endpoint, extra_body, MIT
 
 **Trigger**: preparing the repo to go public. An inventory found no secrets

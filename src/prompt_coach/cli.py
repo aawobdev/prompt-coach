@@ -24,13 +24,14 @@ if TYPE_CHECKING:  # never imported at runtime -- see the note below
 # nudge.py's docstring), so cli.py being import-heavy at module scope was a
 # real, measured cost: typer must import this whole file to dispatch any
 # single command, so `nudge` paid for report/rubric/pattern/store imports
-# it never touches -- dominated by the `openai` SDK's own type surface
-# (~700-900ms just for `import openai`, see DECISIONS.md 2026-07-29).
+# it never touches -- then dominated by the `openai` SDK (~700-900ms, see
+# DECISIONS.md 2026-07-29). The SDK is gone (2026-10-10), but llm.client
+# still pulls in httpx (~230ms), so the lazy imports stay.
 # CacheDB/Config/models stay eager: stdlib-only, no measurable cost.
 
 app = typer.Typer(
     name="prompt-coach",
-    help="Your personal prompting analyst. Runs locally. Zero data export.",
+    help="Your personal prompting analyst. Local-first: prompts stay on your machine.",
     no_args_is_help=True,
 )
 cache_app = typer.Typer(help="Manage the local analysis cache.")

@@ -5,6 +5,11 @@ The constructor refuses any base URL that does not resolve to a loopback or
 private (RFC1918) host unless allow_remote=True is passed explicitly. A
 gateway can silently fall back to cloud providers, and a cloud endpoint sees
 every prompt sent to it: pointing prompt-coach off-machine must be deliberate.
+
+Requests are one plain httpx POST to `{base_url}/chat/completions`, not the
+`openai` SDK (DECISIONS.md 2026-10-10): the SDK cost ~680 ms to import inside
+the nudge hook, and openai 3 moved to a separate httpx2 stack that respx
+can't mock. One request shape doesn't need a client library.
 """
 
 from __future__ import annotations
@@ -12,10 +17,16 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import time
 from urllib.parse import urlparse
 
 import httpx
-import openai
+
+# Retried once, like the SDK's max_retries=1: transient overload or a
+# dropped connection. Timeouts are not retried -- the attempt already spent
+# the caller's whole budget (nudge runs inside a hook with its own timeout).
+_RETRY_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504})
+_RETRY_DELAY = 0.5
 
 
 class LLMUnavailable(RuntimeError):
@@ -56,10 +67,9 @@ class LocalLLM:
         self.timeout = timeout
         # Sent only when set: see LLMConfig.extra_body.
         self._extra_body = extra_body or None
-        # The SDK rejects an empty key; local servers ignore whatever is sent.
-        self._client = openai.OpenAI(
-            base_url=self.base_url, api_key=api_key or "none", timeout=timeout, max_retries=1
-        )
+        # No Authorization header without a key: local servers don't need one.
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._client = httpx.Client(headers=headers, timeout=timeout)
 
     def available(self) -> bool:
         """Cheap reachability probe; never raises."""
@@ -84,17 +94,7 @@ class LocalLLM:
             {"role": "user", "content": user},
         ]
         for attempt in range(2):
-            try:
-                resp = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    extra_body=self._extra_body,
-                )
-            except openai.OpenAIError as exc:
-                raise LLMUnavailable(f"model call failed: {type(exc).__name__}") from exc
-            text = resp.choices[0].message.content or ""
+            text = self._chat(messages, temperature=temperature, max_tokens=max_tokens)
             try:
                 return _extract_json(text)
             except ValueError as exc:
@@ -110,6 +110,44 @@ class LocalLLM:
                         }
                     )
         raise LLMUnavailable("model returned unparseable JSON twice")
+
+    def _chat(self, messages: list[dict], *, temperature: float, max_tokens: int) -> str:
+        """One chat completion; returns the reply text. Any transport error,
+        non-2xx status or malformed body becomes LLMUnavailable. Error
+        messages carry the status or exception type only, never the body:
+        it may echo the prompt back."""
+        # extra_body first so it can add provider fields but never silently
+        # replace the model, messages or token budget.
+        body = {
+            **(self._extra_body or {}),
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        url = f"{self.base_url}/chat/completions"
+        for attempt in range(2):
+            last = attempt == 1
+            try:
+                resp = self._client.post(url, json=body)
+            except httpx.TimeoutException as exc:
+                raise LLMUnavailable(f"model call failed: {type(exc).__name__}") from exc
+            except httpx.HTTPError as exc:
+                if last:
+                    raise LLMUnavailable(f"model call failed: {type(exc).__name__}") from exc
+                time.sleep(_RETRY_DELAY)
+                continue
+            if resp.status_code in _RETRY_STATUS and not last:
+                time.sleep(_RETRY_DELAY)
+                continue
+            if not resp.is_success:
+                raise LLMUnavailable(f"model call failed: HTTP {resp.status_code}")
+            try:
+                content = resp.json()["choices"][0]["message"]["content"]
+            except (ValueError, KeyError, IndexError, TypeError) as exc:
+                raise LLMUnavailable("model returned a malformed response") from exc
+            return content if isinstance(content, str) else ""
+        raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _extract_json(text: str) -> dict:
