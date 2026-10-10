@@ -1,5 +1,7 @@
 """LocalLLM tests: privacy guard, JSON handling, re-prompt, unavailability."""
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -100,6 +102,109 @@ class TestCompleteJson:
         assert not LocalLLM(BASE, model="m").available()
 
 
+class TestHttp:
+    """The plain-httpx request path (the openai SDK was dropped 2026-10-10)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_retry_sleep(self, monkeypatch):
+        monkeypatch.setattr("prompt_coach.llm.client._RETRY_DELAY", 0)
+
+    @respx.mock
+    @pytest.mark.parametrize("status", [400, 401, 404, 422])
+    def test_client_error_raises_without_retry(self, status):
+        route = respx.post(f"{BASE}/chat/completions").respond(status, text="echo: secret prompt")
+        with pytest.raises(LLMUnavailable) as exc:
+            LocalLLM(BASE, "m").complete_json("s", "u")
+        assert f"HTTP {status}" in str(exc.value)
+        assert "secret prompt" not in str(exc.value)  # body may echo the prompt
+        assert route.call_count == 1
+
+    @respx.mock
+    def test_server_error_retried_once_then_succeeds(self):
+        route = respx.post(f"{BASE}/chat/completions")
+        route.side_effect = [
+            httpx.Response(503),
+            httpx.Response(200, json=completion('{"a": 1}')),
+        ]
+        assert LocalLLM(BASE, "m").complete_json("s", "u") == {"a": 1}
+        assert route.call_count == 2
+
+    @respx.mock
+    def test_server_error_twice_raises(self):
+        route = respx.post(f"{BASE}/chat/completions").respond(500)
+        with pytest.raises(LLMUnavailable, match="HTTP 500"):
+            LocalLLM(BASE, "m").complete_json("s", "u")
+        assert route.call_count == 2
+
+    @respx.mock
+    def test_connect_error_retried_once(self):
+        route = respx.post(f"{BASE}/chat/completions")
+        route.side_effect = [
+            httpx.ConnectError("blip"),
+            httpx.Response(200, json=completion('{"a": 1}')),
+        ]
+        assert LocalLLM(BASE, "m").complete_json("s", "u") == {"a": 1}
+
+    @respx.mock
+    def test_timeout_not_retried(self):
+        route = respx.post(f"{BASE}/chat/completions").mock(side_effect=httpx.ReadTimeout("slow"))
+        with pytest.raises(LLMUnavailable, match="ReadTimeout"):
+            LocalLLM(BASE, "m").complete_json("s", "u")
+        assert route.call_count == 1
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "body",
+        [{"choices": []}, {"no": "choices"}, {"choices": [{"message": None}]}, ["x"]],
+    )
+    def test_malformed_body_raises(self, body):
+        respx.post(f"{BASE}/chat/completions").respond(json=body)
+        with pytest.raises(LLMUnavailable, match="malformed"):
+            LocalLLM(BASE, "m").complete_json("s", "u")
+
+    @respx.mock
+    def test_non_json_body_raises(self):
+        respx.post(f"{BASE}/chat/completions").respond(200, text="<html>proxy page</html>")
+        with pytest.raises(LLMUnavailable, match="malformed"):
+            LocalLLM(BASE, "m").complete_json("s", "u")
+
+    @respx.mock
+    def test_null_content_counts_as_unparseable(self):
+        payload = completion("x")
+        payload["choices"][0]["message"]["content"] = None
+        respx.post(f"{BASE}/chat/completions").respond(json=payload)
+        with pytest.raises(LLMUnavailable, match="unparseable"):
+            LocalLLM(BASE, "m").complete_json("s", "u")
+
+    @respx.mock
+    def test_bearer_header_only_with_a_key(self):
+        route = respx.post(f"{BASE}/chat/completions").respond(json=completion('{"a": 1}'))
+        LocalLLM(BASE, "m").complete_json("s", "u")
+        assert "authorization" not in route.calls.last.request.headers
+        LocalLLM(BASE, "m", api_key="k-123").complete_json("s", "u")
+        assert route.calls.last.request.headers["authorization"] == "Bearer k-123"
+
+    @respx.mock
+    def test_request_shape(self):
+        route = respx.post(f"{BASE}/chat/completions").respond(json=completion('{"a": 1}'))
+        LocalLLM(BASE + "/", "my-model").complete_json("sys", "usr", max_tokens=42)
+        sent = json.loads(route.calls.last.request.content)
+        assert sent["model"] == "my-model"
+        assert sent["max_tokens"] == 42
+        assert sent["temperature"] == 0.0
+        assert sent["messages"] == [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "usr"},
+        ]
+
+    @respx.mock
+    def test_extra_body_cannot_replace_core_fields(self):
+        route = respx.post(f"{BASE}/chat/completions").respond(json=completion('{"a": 1}'))
+        LocalLLM(BASE, "m", extra_body={"model": "other", "top_k": 5}).complete_json("s", "u")
+        sent = json.loads(route.calls.last.request.content)
+        assert (sent["model"], sent["top_k"]) == ("m", 5)
+
+
 class TestExtractJson:
     def test_plain(self):
         assert _extract_json('{"x": 1}') == {"x": 1}
@@ -144,8 +249,6 @@ class TestExtraBody:
     extra is sent when it is unset."""
 
     def _sent_body(self, route):
-        import json
-
         return json.loads(route.calls.last.request.content)
 
     @respx.mock
