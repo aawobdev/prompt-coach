@@ -2,6 +2,12 @@
 
 **Your personal prompting analyst. Local-first: your prompts stay on your machine unless you choose otherwise.**
 
+> **Heads up: this project is VERY vibe-coded.** Almost all of the code,
+> tests and docs were written by AI coding agents working under my
+> direction, as a personal tool I use every day. It has a large test suite
+> and the privacy guard is tested, but expect rough edges and odd design
+> choices. Read the code before you trust it with anything important.
+
 A CLI tool that reads your own prompt history from the AI tools you already
 use, analyses your prompting style, and coaches you on it: style metrics,
 scores against a 13-rule prompting rubric, LLM-detected patterns, and

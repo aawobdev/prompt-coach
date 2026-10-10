@@ -1,12 +1,28 @@
 # Project Status - prompt-coach
-Last updated: 2026-10-10 by Claude (Opus 5.5): open-source prep. No default
-LLM endpoint, generic `extra_body`, MIT licence, personal details scrubbed.
+Last updated: 2026-10-10 by Claude (Opus 5.5): repo is public
+(https://github.com/aawobdev/prompt-coach). Open-source prep merged as #24.
 534 tests.
+
+## Public (2026-10-10)
+
+Made public after #24 merged. Checked first: gitleaks over all 9 remote
+branches (no leaks), PR bodies and comments (no personal data), no issues,
+Actions secrets or releases.
+- Description and 10 topics set. Private vulnerability reporting, secret
+  scanning and push protection enabled.
+- Old feature branches deleted (all fully contained in main).
+- README and CONTRIBUTING say plainly that the project is heavily
+  vibe-coded (written by AI coding agents under direction).
+
+Open:
+- Older commits still contain the details #24 scrubbed from the tree (a LAN
+  IP, home paths, one test prompt). None are secrets; left as history.
+- Commit author email is the maintainer's work address on 42 commits; kept.
+- macOS / native Windows Copilot paths are probed but unverified.
 
 ## Open-source prep (2026-10-10)
 
-Details in DECISIONS.md 2026-10-10. Repo is ready to flip public once this
-merges; the flip itself is a manual step on GitHub.
+Details in DECISIONS.md 2026-10-10.
 - No default endpoint/model: unset = deterministic-only, setup asks for any
   OpenAI-compatible URL and asks before allowing a remote one.
 - `[llm] extra_body` (JSON) replaces `reasoning`; the legacy key still loads
@@ -16,14 +32,6 @@ merges; the flip itself is a manual step on GitHub.
   SECURITY, Dependabot. black 26 / pytest 9 clear both CVEs.
 - gitleaks over all 64 commits: no leaks; no file was ever deleted, so no
   history rewrite is needed.
-
-Open:
-- Before the flip: enable private vulnerability reporting (SECURITY.md links
-  to it), add repo topics, update the GitHub description (it still says
-  "zero data export").
-- Commit author email is the maintainer's work address on 42 commits; kept
-  as-is unless decided otherwise (a rewrite would need a force-push).
-- macOS / native Windows Copilot paths are probed but unverified.
 
 ## Cloud rewrites, y/n replies, auto_rewrite (2026-09-27)
 

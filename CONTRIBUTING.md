@@ -3,6 +3,12 @@
 Thanks for helping. Bug reports, new source readers and heuristic fixes are
 all welcome.
 
+Fair warning: the codebase is very vibe-coded. Most of it was written by AI
+coding agents, so you will find long comments, over-documented decisions and
+some patterns a human would not have chosen. AI-assisted contributions are
+welcome on the same terms as any other: tests pass, and you have read and
+understood what you are submitting.
+
 ## Setup
 
 ```bash
