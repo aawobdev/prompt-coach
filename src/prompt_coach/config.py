@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess  # noqa: S404 -- api_key_cmd runs a user-configured command, by design
 import tomllib
@@ -10,10 +11,12 @@ from pathlib import Path
 
 from prompt_coach.models import SourceKind
 
-DEFAULT_API_BASE = "http://192.168.1.123:11434/v1"
-# The derived tag has num_ctx 32768 baked in; the base qwen3-coder:30b tag
-# runs at the Ollama server default (4096), which truncates pattern payloads.
-DEFAULT_MODEL = "qwen3-coder-30b:latest"
+# No default endpoint or model: any OpenAI-compatible endpoint works, and
+# guessing one (a LAN IP, a vendor) would send requests somewhere the user
+# never chose. Unset = the LLM features are off and everything deterministic
+# still runs; `prompt-coach setup` fills these in.
+DEFAULT_API_BASE = ""
+DEFAULT_MODEL = ""
 
 
 class APIKeyCommandFailed(RuntimeError):
@@ -31,13 +34,18 @@ class LLMConfig:
     # Shell command that prints the API key, run only when an LLM client is
     # actually built -- never at config load, since every hook call loads
     # config (DECISIONS.md 2026-09-27). Keeps cloud keys out of config.toml:
-    # point it at a secrets manager (e.g. a `bws secret get` lookup).
+    # point it at a secrets manager (e.g. `pass show openrouter`).
     api_key_cmd: str = ""
-    # None = send nothing (Ollama, and any endpoint that doesn't know the
-    # field). False = ask an OpenRouter-style endpoint to skip reasoning:
-    # DeepSeek v4 flash otherwise spends the whole token budget thinking and
-    # returns no content (measured 2026-09-27).
-    reasoning: bool | None = None
+    # Extra JSON merged into every chat-completions request body, for
+    # provider-specific knobs the OpenAI schema lacks. None = send nothing.
+    # e.g. {"reasoning": {"enabled": false}} stops an OpenRouter reasoning
+    # model spending its whole token budget thinking (measured 2026-09-27).
+    extra_body: dict | None = None
+
+    @property
+    def configured(self) -> bool:
+        """An endpoint and model are both set. Unset = deterministic-only."""
+        return bool(self.base_url and self.model)
 
     def resolve_api_key(self, timeout: float = 10.0) -> str:
         if not self.api_key_cmd:
@@ -171,7 +179,7 @@ def load_config(path: Path | None = None) -> Config:
 
     base_url = env("API_BASE", llm_cfg.get("api_base", DEFAULT_API_BASE))
     model = env("MODEL", llm_cfg.get("model", DEFAULT_MODEL))
-    api_key = env("API_KEY", llm_cfg.get("api_key", "ollama"))
+    api_key = env("API_KEY", llm_cfg.get("api_key", ""))
     # An explicit PROMPT_COACH_API_KEY beats the command (handy for one-off
     # runs); the command beats a plain api_key in the file.
     api_key_cmd = (
@@ -179,13 +187,16 @@ def load_config(path: Path | None = None) -> Config:
         if "PROMPT_COACH_API_KEY" in os.environ
         else env("API_KEY_CMD", llm_cfg.get("api_key_cmd", ""))
     )
-    reasoning_raw = env("REASONING", "")
-    reasoning: bool | None
-    if reasoning_raw:
-        reasoning = reasoning_raw.lower() in ("1", "true", "yes")
-    else:
-        file_reasoning = llm_cfg.get("reasoning")
-        reasoning = None if file_reasoning is None else bool(file_reasoning)
+    extra_body = _load_extra_body(env("EXTRA_BODY", llm_cfg.get("extra_body", "")))
+    if extra_body is None:
+        # Legacy (pre-2026-10-10) `reasoning = true|false`: the OpenRouter
+        # field it used to hard-code. write_config() saves it as extra_body.
+        reasoning_raw = env("REASONING", "")
+        legacy = llm_cfg.get("reasoning")
+        if reasoning_raw:
+            legacy = reasoning_raw.lower() in ("1", "true", "yes")
+        if legacy is not None:
+            extra_body = {"reasoning": {"enabled": bool(legacy)}}
     allow_remote = env(
         "ALLOW_REMOTE", "true" if llm_cfg.get("allow_remote", False) else "false"
     ).lower() in ("1", "true", "yes")
@@ -248,7 +259,7 @@ def load_config(path: Path | None = None) -> Config:
             allow_remote=allow_remote,
             timeout=timeout,
             api_key_cmd=api_key_cmd,
-            reasoning=reasoning,
+            extra_body=extra_body,
         ),
         stores=StoresConfig(
             hermes_db=hermes_db,
@@ -266,6 +277,18 @@ def load_config(path: Path | None = None) -> Config:
         model_fit=ModelFitConfig(mode=model_fit_mode),
         cache_dir=cache_dir,
     )
+
+
+def _load_extra_body(raw: str) -> dict | None:
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"llm.extra_body must be a JSON object: {exc}") from None
+    if not isinstance(value, dict):
+        raise ValueError("llm.extra_body must be a JSON object")
+    return value or None
 
 
 def config_file_path() -> Path:
@@ -294,8 +317,14 @@ def write_config(cfg: Config, path: Path) -> None:
     ]
     if cfg.llm.api_key_cmd:
         lines.append(f"api_key_cmd = {_toml_str(cfg.llm.api_key_cmd)}")
-    if cfg.llm.reasoning is not None:
-        lines.append(f"reasoning = {str(cfg.llm.reasoning).lower()}")
+    if cfg.llm.extra_body:
+        body = json.dumps(cfg.llm.extra_body)
+        # A TOML literal string keeps the JSON hand-editable (no escaped
+        # quotes) whenever it holds no single quote or newline.
+        if "'" in body or "\n" in body:
+            lines.append(f"extra_body = {_toml_str(body)}")
+        else:
+            lines.append(f"extra_body = '{body}'")
     lines += [
         "",
         "[stores]",

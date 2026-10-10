@@ -1,13 +1,35 @@
 # Project Status - prompt-coach
-Last updated: 2026-09-27 by Claude (Opus 5.5): cloud rewrite model
-(DeepSeek via OpenRouter), y/n replies to a block, auto_rewrite. All paths
-tested live in the desktop app. 526 tests.
+Last updated: 2026-10-10 by Claude (Opus 5.5): open-source prep. No default
+LLM endpoint, generic `extra_body`, MIT licence, personal details scrubbed.
+534 tests.
+
+## Open-source prep (2026-10-10)
+
+Details in DECISIONS.md 2026-10-10. Repo is ready to flip public once this
+merges; the flip itself is a manual step on GitHub.
+- No default endpoint/model: unset = deterministic-only, setup asks for any
+  OpenAI-compatible URL and asks before allowing a remote one.
+- `[llm] extra_body` (JSON) replaces `reasoning`; the legacy key still loads
+  and is rewritten on the next `setup`.
+- README reframed: sources as equal auto-detected readers, JSON import for
+  anything else, integrations optional. LICENSE (MIT), CONTRIBUTING,
+  SECURITY, Dependabot. black 26 / pytest 9 clear both CVEs.
+- gitleaks over all 64 commits: no leaks; no file was ever deleted, so no
+  history rewrite is needed.
+
+Open:
+- Before the flip: enable private vulnerability reporting (SECURITY.md links
+  to it), add repo topics, update the GitHub description (it still says
+  "zero data export").
+- Commit author email is the maintainer's work address on 42 commits; kept
+  as-is unless decided otherwise (a rewrite would need a force-push).
+- macOS / native Windows Copilot paths are probed but unverified.
 
 ## Cloud rewrites, y/n replies, auto_rewrite (2026-09-27)
 
 Local Ollama is usually off, so coach/always rewrites had been silently
 falling back to tips. Now (details in DECISIONS.md, three 2026-09-27 entries):
-- `[llm] api_key_cmd` (key from bws, never on disk) and `reasoning = false`
+- `[llm] api_key_cmd` (key from a secrets manager, never on disk) and `reasoning = false`
   (DeepSeek v4 flash otherwise returns nothing). Live: `deepseek/deepseek-v4.1-flash`
   on a dedicated $5-capped OpenRouter key; the account enforces ZDR (verified).
 - Block offers "Reply y ... n ..."; every path makes Claude quote what was
@@ -110,7 +132,7 @@ has `pastedContents` but only the terminal CLI writes it, last on Sep 10).
   phases 1-4 done, paste detection complete incl. mid-line PowerShell
   prompts, Hermes classification done, scorer no longer punishes length).
   Installed CLI rebuilt from `4fca197` with a plain `uv tool install --force .` (#7's cache-keys make
-  that rebuild without extra flags). Plugin enabled from the `/home/alistair/projects/
+  that rebuild without extra flags). Plugin enabled from the `~/projects/
   prompt-coach` directory marketplace, so hook/skill changes load in place
   at the next session.
 - **Verified on the installed build**: #19 is live (a PowerShell session
@@ -417,8 +439,8 @@ and the setup wizard prompts for it. Example config:
 
 ```toml
 [nudge.dir_overrides]
-"/home/alistair/projects/important-project" = "coach"
-"/home/alistair/projects/experiments" = "off"
+"~/projects/important-project" = "coach"
+"~/projects/experiments" = "off"
 ```
 
 ## "auto" nudge mode: hands-off prompt improvement (2026-08-10)

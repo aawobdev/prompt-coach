@@ -194,16 +194,14 @@ def test_model_column_migrated_on_pre_existing_db(tmp_path):
     import sqlite3 as _sqlite3
 
     conn = _sqlite3.connect(path)
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE prompts (
             source TEXT NOT NULL, session_id TEXT NOT NULL, message_ref TEXT NOT NULL,
             content TEXT NOT NULL, content_hash TEXT NOT NULL, timestamp REAL NOT NULL,
             origin TEXT NOT NULL, cwd TEXT, git_repo TEXT,
             PRIMARY KEY (source, session_id, message_ref)
         );
-        """
-    )
+        """)
     conn.commit()
     conn.close()
     db = CacheDB(path)

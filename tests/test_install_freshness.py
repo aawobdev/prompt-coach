@@ -36,6 +36,8 @@ def test_reinstall_after_a_code_only_commit_installs_the_new_code(tmp_path, monk
     repo = tmp_path / "repo"
     shutil.copytree(ROOT / "src", repo / "src", ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy(ROOT / "pyproject.toml", repo / "pyproject.toml")
+    for name in ("README.md", "LICENSE"):  # named by pyproject readme/license-files
+        shutil.copy(ROOT / name, repo / name)
     git = ["git", "-c", "user.email=t@example.com", "-c", "user.name=t"]
     _run(["git", "init", "-q"], repo)
     _run([*git, "add", "-A"], repo)

@@ -19,8 +19,7 @@ T0 = datetime(2026, 7, 1, 12, 0, tzinfo=UTC).timestamp()
 def state_db(tmp_path):
     path = tmp_path / "state.db"
     conn = sqlite3.connect(path)
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE sessions (
             id TEXT PRIMARY KEY, source TEXT, started_at REAL, title TEXT,
             cwd TEXT, git_repo_root TEXT, model TEXT
@@ -29,8 +28,7 @@ def state_db(tmp_path):
             id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT,
             timestamp REAL, active INTEGER DEFAULT 1, compacted INTEGER DEFAULT 0
         );
-        """
-    )
+        """)
     conn.executemany(
         "INSERT INTO sessions VALUES (?,?,?,?,?,?,?)",
         [
@@ -123,8 +121,7 @@ def _db(tmp_path, rows):
     """state.db clone holding (session source, content) user rows, in order."""
     path = tmp_path / "wrapped.db"
     conn = sqlite3.connect(path)
-    conn.executescript(
-        """
+    conn.executescript("""
         CREATE TABLE sessions (
             id TEXT PRIMARY KEY, source TEXT, started_at REAL, title TEXT,
             cwd TEXT, git_repo_root TEXT, model TEXT
@@ -133,8 +130,7 @@ def _db(tmp_path, rows):
             id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT,
             timestamp REAL, active INTEGER DEFAULT 1, compacted INTEGER DEFAULT 0
         );
-        """
-    )
+        """)
     for i, (source, content) in enumerate(rows):
         conn.execute(
             "INSERT INTO sessions VALUES (?,?,?,?,?,?,?)",
@@ -209,14 +205,14 @@ def test_unclosed_notice_is_machine_not_misread(tmp_path):
 
 
 def test_owner_speaker_label_is_stripped(tmp_path):
-    assert _read(tmp_path, [("slack", "[alistair] restart plex")]) == [("restart plex", HUMAN)]
+    assert _read(tmp_path, [("slack", "[sam] restart plex")]) == [("restart plex", HUMAN)]
 
 
 def test_other_speakers_messages_are_skipped(tmp_path):
     rows = [
-        ("slack", "[alistair] restart plex"),
-        ("slack", "[alistair] and sonarr"),
-        ("slack", "[Jamie] what about radarr"),
+        ("slack", "[sam] restart plex"),
+        ("slack", "[sam] and sonarr"),
+        ("slack", "[robin] what about radarr"),
     ]
     assert _read(tmp_path, rows) == [("restart plex", HUMAN), ("and sonarr", HUMAN)]
 
@@ -228,7 +224,7 @@ def test_document_header_is_not_a_speaker(tmp_path):
 
 def test_injected_skill_body_is_stripped(tmp_path):
     raw = (
-        '[alistair] [IMPORTANT: The "homelab" skill is auto-loaded. Follow its'
+        '[sam] [IMPORTANT: The "homelab" skill is auto-loaded. Follow its'
         " instructions for this session.]\n\n---\nname: homelab\n---\n# Homelab\n"
         "Step: do things.\n[Skill directory: /home/x/skills/homelab]\n"
         "Resolve relative paths, then run them with the terminal tool using the"
@@ -244,7 +240,7 @@ def test_skill_block_without_its_closing_sentence_is_machine(tmp_path):
 
 def test_stacked_wrappers_all_stripped(tmp_path):
     raw = (
-        '[Replying to: "Which host?"]\n\n[alistair] '
+        '[Replying to: "Which host?"]\n\n[sam] '
         "[The user sent a document: 'a.log'. It is saved at: /tmp/a.log]\n\n"
         "the media host"
     )

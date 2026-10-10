@@ -16,12 +16,13 @@ in `DECISIONS.md`.)
 
 A **local-first, privacy-preserving prompt coach**: a CLI tool that reads your
 conversation history from local session stores, analyses your personal
-prompting patterns (deterministic metrics + prompting-standards A1-A13 rubric
-+ local-LLM pattern detection), and produces coaching reports. Zero prompt
-content ever leaves the machine.
+prompting patterns (deterministic metrics + the A1-A13 prompting rubric in
+`analysis/rubric.py` + LLM pattern detection), and produces coaching reports.
+Prompt content stays on the machine unless the user explicitly allows a
+remote LLM endpoint.
 
-Adjacent module to the `llm-api` project (`~/projects/llm-api`). Shares
-conventions (uv, ruff, black, pytest, src-layout, STATUS/DECISIONS docs).
+The tool is harness- and model-agnostic: one read-only reader per source
+tool, and any OpenAI-compatible endpoint (or none) for the LLM features.
 
 ## Session stores (verified facts, do not trust older docs)
 
@@ -55,11 +56,11 @@ conventions (uv, ruff, black, pytest, src-layout, STATUS/DECISIONS docs).
   typed (verified live 2026-09-24, 2,829 rows). Rows from `cron` and
   `subagent` sessions are all machine (739 + 5). Slack/cli rows wrap the
   typed text in gateway metadata: `[Replying to: "<bot text>"]` (1,428),
-  a thread-context replay (405), `[alistair] ` speaker labels, attachment
+  a thread-context replay (405), `[sam] ` speaker labels, attachment
   and model-switch notices, and whole injected `SKILL.md` bodies (126).
   `stores/hermes.py` `unwrap()` strips them; what's left starting
   `[System:` / `[IMPORTANT:` / compaction markers is the agent talking to
-  itself (machine), and another speaker's label (`[Jamie]`) drops the row.
+  itself (machine), and another speaker's label (`[robin]`) drops the row.
   `hermes -z` task specs (`TASK:`, `CARD n of n`) are machine too. Bump
   `HermesStore.parser_version` when this changes: the cache re-reads the
   store on a mismatch (a forced sync alone never rewrites cached rows).
@@ -72,7 +73,7 @@ conventions (uv, ruff, black, pytest, src-layout, STATUS/DECISIONS docs).
 uv sync                                  # install deps
 uv run prompt-coach discover             # list session stores with counts
 uv run prompt-coach report --since 7d    # coaching report, recent history
-uv run prompt-coach report --no-llm      # deterministic-only (Ollama off)
+uv run prompt-coach report --no-llm      # deterministic-only (no LLM needed)
 uv run prompt-coach query "what did I work on last week?"
 ```
 
@@ -82,12 +83,12 @@ uv run prompt-coach query "what did I work on last week?"
   `src/prompt_coach/`
 - Stdlib `sqlite3` for all DB access (read-only sources + local cache DB
   with FTS5). Synchronous code throughout: no ORM, no asyncio.
-- **openai** sync client. Default is a local model: direct Ollama
-  (`http://192.168.1.123:11434/v1`, default `qwen3-coder-30b:latest`, 32k num_ctx) or the
-  llm-api gateway on localhost. The LLM client refuses non-private base URLs
-  unless `allow_remote = true` is configured: the privacy guarantee depends
-  on it. A cloud model is an explicit opt-in (DECISIONS.md 2026-09-27);
-  Alistair's live config uses DeepSeek v4.1 flash via OpenRouter.
+- **openai** sync client against any OpenAI-compatible endpoint. There is no
+  default endpoint or model (DECISIONS.md 2026-10-10): unset means
+  deterministic-only, and every LLM caller must degrade cleanly. The client
+  refuses non-private base URLs unless `allow_remote = true` is configured:
+  the privacy guarantee depends on it. Provider-specific request fields go
+  through `[llm] extra_body` (JSON), never hard-coded per vendor.
 - **ruff** (lint, incl. `S` security rules), **black** (format), **pytest**
   (+respx for HTTP mocking).
 - `server/` is an empty placeholder; the read-only HTTP API is phase 2.
@@ -191,18 +192,9 @@ Configure in `~/.config/prompt-coach/config.toml` under `[nudge] mode`.
 - **Privacy**: never log or print prompt content in diagnostics; counts and
   hashes only. Never write a cloud API key into config: use `api_key_cmd`.
 
-## Integration with llm-api
-
-Separate repos, shared conventions. `prompt-coach` can talk to local models
-through llm-api's `/v1/chat/completions` on localhost, but only when that
-gateway's routing is pinned to local providers (it can fall back to
-OpenRouter, which would leak prompt content; the client guard exists for
-this). Usage-log ingestion from llm-api is deferred to phase 2.
-
 ## Key References
 
-- `BLUEPRINT.md`: full spec, corrected store schemas, build plan T1-T34
+- `BLUEPRINT.md`: original spec, corrected store schemas, build plan T1-T34
 - `STATUS.md` / `DECISIONS.md`: progress and decision history
-- `~/projects/hermes-skills/skills/prompting-standards/SKILL.md`: the A1-A13
-  rubric the analysis scores against
-- `~/projects/hermes-skills/shared/learnings.md`: user conventions and context
+- `src/prompt_coach/analysis/rubric.py`: the A1-A13 rubric the analysis
+  scores against

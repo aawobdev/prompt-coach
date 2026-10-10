@@ -130,7 +130,7 @@ Acceptance criteria:
         v                                        v
 +-------------------+                  +----------------------+
 | Session stores    |                  | Local LLM only       |
-| ~/.hermes/state.db|                  | Ollama 192.168.1.123 |
+| ~/.hermes/state.db|                  | Ollama <lan-host> |
 | ~/.claude/projects|                  | :11434/v1 (or llm-api|
 | JSON imports      |                  | gateway, guarded)    |
 +-------------------+                  +----------------------+
@@ -180,7 +180,7 @@ pyproject (T5). Reversibility: a ThreadPoolExecutor around LLM calls is a
 contained later change if concurrency ever pays.
 
 **Decision 2: runtime analysis model is local-only, direct Ollama default.**
-Default `http://192.168.1.123:11434/v1`, model `qwen3-coder-30b:latest` (num_ctx 32768 baked in; the base tag runs at the 4k server default). The llm-api
+Default `http://<lan-host>:11434/v1`, model `qwen3-coder-30b:latest` (num_ctx 32768 baked in; the base tag runs at the 4k server default). The llm-api
 gateway (`http://localhost:8080/v1`) is supported but guarded, because the
 gateway can route or fall back to cloud providers, which would silently break
 the privacy promise (section 4e). Config precedence: `PROMPT_COACH_*` env
@@ -270,7 +270,7 @@ the file-level counterpart of the isSidechain filter). Total tree 691MB,
 {"type":"user","message":{"role":"user","content":"..."},
  "promptSource":"typed","origin":{"kind":"human"},"isSidechain":false,
  "uuid":"...","timestamp":"2026-06-22T21:39:40.265Z","sessionId":"...",
- "cwd":"/home/alistair/projects/x","gitBranch":"master"}
+ "cwd":"~/projects/x","gitBranch":"master"}
 ```
 
 Accept a line only when ALL hold:
@@ -422,7 +422,7 @@ your machine"; every decision below defends it.
   config. This exists because the llm-api gateway can fall back to
   OpenRouter: pointing prompt-coach at a gateway is only safe if that
   gateway's routing is pinned local, and the guard makes the user say so out
-  loud. The default (direct desktop Ollama at 192.168.1.123) is plain HTTP
+  loud. The default (direct desktop Ollama at <lan-host>) is plain HTTP
   on the LAN; acceptable in this homelab, stated here so it is a choice.
 - **Logging**: prompt content is never written to logs, stdout diagnostics,
   or error messages. Counts and hashes only.
@@ -513,7 +513,7 @@ content acquisition early (stores + cache), then analysis, then surface.
 **T7: config.py**
 - Role: Developer · Reasoning: no_think
 - Description: load order env `PROMPT_COACH_*` > `~/.config/prompt-coach/
-  config.toml` (tomllib) > defaults (base_url http://192.168.1.123:11434/v1,
+  config.toml` (tomllib) > defaults (base_url http://<lan-host>:11434/v1,
   model qwen3-coder-30b:latest, allow_remote false, cache dir XDG), returning a
   frozen Config object, because every entry point needs one canonical config.
 - Output contract: src/prompt_coach/config.py only.
@@ -811,7 +811,7 @@ the multi-tier routing in v1 and aligns with the pending 2-tier proposal in
 hermes-skills DECISIONS.md). No hermes -z local-model routing for the build.
 
 **Runtime analysis model** (a product config, not build routing):
-- Default: qwen3-coder-30b:latest (32k num_ctx) via direct Ollama, http://192.168.1.123:11434/v1.
+- Default: qwen3-coder-30b:latest (32k num_ctx) via direct Ollama, http://<lan-host>:11434/v1.
 - Optional: llm-api gateway on localhost:8080/v1, only with local-pinned
   routing; the allow_remote guard enforces the conversation (section 4e).
 - No model reachable: deterministic-only mode, clearly bannered. This path
