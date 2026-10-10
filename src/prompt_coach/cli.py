@@ -265,6 +265,20 @@ def doctor(json_format: bool = typer.Option(False, "--json", help="Output as JSO
             typer.echo(f"  [{level}]{' ' * (5 - len(level))} {message}")
 
 
+def _cost_section(cache: CacheDB, cfg: Config, since_dt: datetime | None, prompts):
+    """The shared cost block for report/dash. Reads the cache only (the
+    caller already synced)."""
+    from prompt_coach.analysis.cost_section import build_cost_section
+
+    return build_cost_section(
+        cache.usage_records(since=since_dt),
+        prompts,
+        cfg.cost,
+        since=since_dt,
+        prompt_sessions=cache.sessions_by_source(since=since_dt),
+    )
+
+
 def _cost_checks(cfg: Config) -> list[tuple[str, str]]:
     """Read-only cost health: usage per store (from the cache), models with no
     price, a billed_fraction left at the 1.0 default, and price-table age."""
@@ -773,6 +787,7 @@ def report(
         llm_model=cfg.llm.model if llm is not None else None,
         session_titles=tuple(HermesStore(cfg.stores.hermes_db).session_titles(since_dt)[:30]),
         model_fit=detect_mismatches(prompts, cfg.model_fit.mode),
+        cost=_cost_section(cache, cfg, since_dt, prompts) if cfg.cost.enabled else None,
     )
     text = build_report(data)
     if out:
@@ -843,6 +858,7 @@ def dash(
         model_fit=detect_mismatches(prompts, cfg.model_fit.mode),
         width=console.size.width,
         plain=plain,
+        cost=_cost_section(cache, cfg, since_dt, prompts) if cfg.cost.enabled else None,
     )
     console.print(renderable)
 
@@ -899,6 +915,7 @@ def _render_dash_html(
                 model_fit=detect_mismatches(prompts, cfg.model_fit.mode),
                 width=HTML_WIDTH,
                 plain=False,
+                cost=_cost_section(cache, cfg, since_dt, prompts) if cfg.cost.enabled else None,
             )
         )
     generated = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
@@ -1172,7 +1189,8 @@ def cost(
     Deterministic and local: list prices x [cost] billed_fraction. Not a bill."""
     import json as _json
 
-    from prompt_coach.analysis.cost import GROUP_KEYS, group_costs, summarise
+    from prompt_coach.analysis.cost import GROUP_KEYS, group_costs
+    from prompt_coach.analysis.cost_section import build_cost_section
     from prompt_coach.report import cost_view
 
     if by not in GROUP_KEYS:
@@ -1201,16 +1219,24 @@ def cost(
             " (Claude Code, Hermes and Copilot CLI do). Try a wider --since."
         )
         return
-    summary = summarise(records, cfg.cost, since=since_dt, prompt_sessions=prompt_sessions)
+    section = build_cost_section(
+        records,
+        cache.prompts(since=since_dt),
+        cfg.cost,
+        since=since_dt,
+        prompt_sessions=prompt_sessions,
+    )
+    summary, scores = section.summary, section.scores
     groups = group_costs(records, by, cfg.cost) if by != "session" else ()
+    kwargs = {"by": by, "top": top, "groups": groups, "scores": scores}
     if json_format:
-        typer.echo(_json.dumps(cost_view.to_json(summary, by=by, top=top, groups=groups)))
+        typer.echo(_json.dumps(cost_view.to_json(summary, **kwargs)))
     elif plain:
-        typer.echo(cost_view.render_plain(summary, label, by=by, top=top, groups=groups))
+        typer.echo(cost_view.render_plain(summary, label, **kwargs))
     else:
         from rich.console import Console
 
-        Console().print(cost_view.render_rich(summary, label, by=by, top=top, groups=groups))
+        Console().print(cost_view.render_rich(summary, label, **kwargs))
 
 
 @app.command("streaks")

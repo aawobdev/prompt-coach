@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from rich.columns import Columns
 from rich.console import Group, RenderableType
@@ -192,6 +193,39 @@ def _model_fit_section(fit: ModelFitSummary) -> RenderableType:
     return Panel(table)
 
 
+if TYPE_CHECKING:
+    from prompt_coach.analysis.cost_section import CostSection
+
+
+def _cost_section(cost: CostSection, label: str, plain: bool) -> RenderableType:
+    """Totals, weekly spend, the A14-A16 row and the lever. Money and counts
+    only, same privacy rule as the other panels."""
+    s = cost.summary
+    if not cost.has_usage:
+        return Text("cost · no usage data in window", style="dim")
+    cur = s.cost.currency
+    ctx = f"{s.cost.context_warn_tokens // 1000}k"
+    rows: list[RenderableType] = [
+        Text.assemble(
+            (f"{cur} {s.total:,.2f} est.", "bold"),
+            (f"   Opus/Fable {s.top_tier_share:.0%}", ""),
+            (f"   >{ctx} sessions {s.large_share:.0%} of spend", ""),
+        )
+    ]
+    if not plain:
+        cents = [round(v * 100) for v in cost.weekly]
+        rows.append(Text.assemble(("weekly  ", "dim"), (sparkline(cents), "cyan")))
+    scores = Text()
+    for r in cost.rules:
+        scores.append(f"{r.rule} ", style="bold")
+        scores.append_text(_score_text(r.mean, r.coverage))
+        scores.append("   ")
+    rows.append(scores)
+    rows.append(Text(f"Lever: {s.lever.text}", style="yellow"))
+    rows.append(Text("Estimates from list prices; not a bill.", style="dim"))
+    return Panel(Group(*rows), title=f"Cost ({label})", title_align="left")
+
+
 def build_dash(
     *,
     metrics: StyleMetrics,
@@ -206,6 +240,7 @@ def build_dash(
     model_fit: ModelFitSummary | None = None,
     width: int = 120,
     plain: bool = False,
+    cost: CostSection | None = None,
 ) -> RenderableType:
     header_parts: list[tuple[str, str]] = [
         ("prompt-coach", "bold cyan"),
@@ -294,4 +329,6 @@ def build_dash(
         parts.append(_docs_section(docs))
     if model_fit is not None:
         parts.append(_model_fit_section(model_fit))
+    if cost is not None:
+        parts.append(_cost_section(cost, since_label, plain))
     return Group(*parts)

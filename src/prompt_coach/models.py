@@ -6,6 +6,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # analysis imports models, so only for type checkers
+    from prompt_coach.analysis.cost_section import CostSection
 
 LOW_N_THRESHOLD = 3  # coverage below this renders dim + "low n", distinct from n/a
 
@@ -274,3 +278,4 @@ class ReportData:
     llm_model: str | None
     session_titles: tuple[tuple[str, str], ...] = ()  # (date, title)
     model_fit: ModelFitSummary | None = None  # None when mode is "off"
+    cost: CostSection | None = None  # None when [cost] enabled = false

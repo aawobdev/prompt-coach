@@ -93,6 +93,48 @@ No mismatches found.
 {%- endfor %}
 {% endif %}
 {% endif %}
+{% if data.cost %}
+{%- set c = data.cost.summary -%}
+{%- set cur = c.cost.currency %}
+## Cost (est.)
+
+{% if not data.cost.has_usage -%}
+No token usage recorded in this window (Claude Code, Hermes and Copilot CLI record it).
+{% else -%}
+| Metric | Value |
+|---|---|
+| Total | {{ money(c.total, cur) }} est. |
+| Overhead (sub-agents, background tasks) | {{ money(c.overhead, cur) }} |
+| Sessions over {{ c.cost.context_warn_tokens // 1000 }}k context per call | {{ c.large_sessions }} of {{ c.sessions|length }} ({{ '%.0f%%'|format(c.large_share * 100) }} of spend) |
+| Spend on Opus/Fable | {{ '%.0f%%'|format(c.top_tier_share * 100) }} |
+{%- if data.cost.longest %}
+| Longest session | {{ '{:,}'.format(data.cost.longest.api_calls) }} calls, {{ '%.0f'|format(data.cost.longest.context_per_call / 1000) }}k context per call |
+{%- endif %}
+
+| Session | Store | Folder | Model | Calls | Est |
+|---|---|---|---|---:|---:|
+{%- for s in c.sessions[:5] %}
+| {{ s.session_id[:12] }} | {{ s.source.value }} | {{ folder_of(s.cwd) }} | {{ s.model or '?' }} | {{ '{:,}'.format(s.api_calls) }} | {{ money(s.est_cost, cur) }} |
+{%- endfor %}
+
+| Rule | Score | Coverage |
+|---|---|---|
+{%- for r in data.cost.rules %}
+| {{ r.rule }} {{ r.title }} | {% if r.mean is none %}n/a{% else %}**{{ score_label(r.mean, r.coverage) }}**{% endif %} | {{ r.coverage }} |
+{%- endfor %}
+
+**Biggest lever:** {{ c.lever.text }}
+{%- if c.no_usage %}
+
+No usage data: {% for src, n in c.no_usage.items() %}{{ src }} ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}.
+{%- endif %}
+{%- if c.unpriced_models %}
+
+No price for: {{ c.unpriced_models.keys()|list|join(', ') }} (`prompt-coach doctor`).
+{%- endif %}
+{% endif %}
+{{ cost_disclaimer }} List prices ({{ c.cost.price_table_date }}) x billed fraction {{ c.cost.billed_fraction }}{% if c.cost.usd_rate != 1.0 %} x {{ c.cost.usd_rate }}{% endif %}. See `prompt-coach cost`.
+{% endif %}
 {% if data.session_titles %}
 ## Sessions This Period
 
