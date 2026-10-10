@@ -167,24 +167,140 @@ def _state_path(cache_dir: Path) -> Path:
     return cache_dir / "nudge_state.json"
 
 
-def _load_nudged_sessions(cache_dir: Path) -> list[str]:
+def _load_state(cache_dir: Path) -> dict:
     path = _state_path(cache_dir)
     if not path.is_file():
-        return []
+        return {}
     try:
         data = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
-        return []
-    sessions = data.get("nudged_sessions", [])
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_state(cache_dir: Path, data: dict) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    _state_path(cache_dir).write_text(json.dumps(data))
+
+
+def _load_nudged_sessions(cache_dir: Path) -> list[str]:
+    sessions = _load_state(cache_dir).get("nudged_sessions", [])
     return sessions if isinstance(sessions, list) else []
 
 
 def _record_nudge(cache_dir: Path, session_id: str) -> None:
+    data = _load_state(cache_dir)  # keep other keys (cost-warning counters)
     sessions = _load_nudged_sessions(cache_dir)
     sessions.append(session_id)
-    sessions = sessions[-_MAX_TRACKED_SESSIONS:]
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    _state_path(cache_dir).write_text(json.dumps({"nudged_sessions": sessions}))
+    data["nudged_sessions"] = sessions[-_MAX_TRACKED_SESSIONS:]
+    _save_state(cache_dir, data)
+
+
+# -- opt-in session-size warning (cost layer, 2026-10-10) ---------------------
+
+_COST_BUDGET_S = 0.03  # transcript catch-up slice per prompt; target under 50 ms total
+
+
+def _session_usage_now(payload: dict, cfg: Config):
+    """(records, source) for the live session, or None. Claude Code: read just
+    the transcript bytes added since the last prompt (bounded; a long first
+    read finishes over the next prompts). Hermes: one indexed read of
+    state.db. Anything else: no usage data."""
+    import time
+
+    session_id = payload.get("session_id", "")
+    if not session_id:
+        return None
+    if payload.get("hook_event_name") == "pre_llm_call":
+        from prompt_coach.stores.hermes import HermesStore
+
+        records = list(HermesStore(cfg.stores.hermes_db).iter_usage(session_id=session_id))
+        return records or None
+    transcript = payload.get("transcript_path")
+    if not transcript or not Path(transcript).is_file():
+        return None
+    from prompt_coach.stores.claude_code import ClaudeCodeStore
+
+    cache = CacheDB(cfg.cache_dir / "cache.db")
+    try:
+        finished = cache.sync_usage_file(
+            ClaudeCodeStore(),
+            Path(transcript),
+            deadline=time.monotonic() + _COST_BUDGET_S,
+        )
+        cache.conn.commit()
+        if not finished:
+            return None  # still catching up on a long transcript: say nothing yet
+        return cache.session_usage("claude-code", session_id) or None
+    finally:
+        cache.close()
+
+
+def cost_warning(payload: dict, cfg: Config) -> str | None:
+    """The one-line session-size warning, or None. Never raises: any failure
+    means no line, and the prompt goes through untouched either way."""
+    if not (cfg.nudge.cost_warning and cfg.cost.enabled):
+        return None  # off by default: no lookup, no latency
+    if payload.get("hook_event_name") not in ("UserPromptSubmit", "pre_llm_call"):
+        return None
+    try:
+        records = _session_usage_now(payload, cfg)
+        if not records:
+            return None
+        from prompt_coach.analysis.cost import aggregate_sessions, record_cost
+
+        (session,) = aggregate_sessions(records, cfg.cost)
+        over = (
+            session.context_per_call > cfg.cost.context_warn_tokens
+            or session.api_calls > cfg.cost.calls_warn
+        )
+        if not over:
+            return None
+        session_id = payload["session_id"]
+        data = _load_state(cfg.cache_dir)
+        counts = data.get("cost_warning_counts")
+        counts = counts if isinstance(counts, dict) else {}
+        since_last = counts.get(session_id)
+        if isinstance(since_last, int) and since_last + 1 < cfg.nudge.cost_warning_every:
+            counts[session_id] = since_last + 1
+            data["cost_warning_counts"] = counts
+            _save_state(cfg.cache_dir, data)
+            return None
+        counts.pop(session_id, None)  # re-insert last: oldest sessions get trimmed first
+        counts[session_id] = 0
+        data["cost_warning_counts"] = dict(list(counts.items())[-_MAX_TRACKED_SESSIONS:])
+        _save_state(cfg.cache_dir, data)
+        per_call = [r for r in records if r.calls == 1]
+        if per_call:  # the latest call is the honest "now"
+            last = max(per_call, key=lambda r: r.first_ts)
+            context, per_reply = last.context_tokens, record_cost(last, cfg.cost)
+        else:  # per-model totals: averages are all there is
+            context = session.context_per_call
+            per_reply = session.est_cost / session.api_calls if session.est_cost else None
+        cost_text = (
+            f"about {cfg.cost.currency} {per_reply:.2f} per reply (est.)"
+            if per_reply is not None
+            else "cost per reply unknown (no price for this model)"
+        )
+        return (
+            f"Session size: {session.api_calls:,} calls, ~{context / 1000:.0f}k context, "
+            f"{cost_text}. Consider wrapping up and starting a fresh session."
+        )
+    except Exception:  # noqa: BLE001 -- a hook must never fail on an optional extra
+        return None
+
+
+def with_cost_warning(response: dict, payload: dict, cfg: Config) -> dict:
+    """Add-only: append the warning to whatever nudge decided. The prompt is
+    never blocked or changed because of it. Claude Code shows `systemMessage`
+    to the user; Hermes's pre_llm_call can only add `context`."""
+    line = cost_warning(payload, cfg)
+    if line is None:
+        return response
+    out = dict(response)
+    key = "context" if payload.get("hook_event_name") == "pre_llm_call" else "systemMessage"
+    out[key] = f"{out[key]}\n{line}" if out.get(key) else line
+    return out
 
 
 def should_nudge(prompt: str, session_id: str, cache_dir: Path) -> bool:

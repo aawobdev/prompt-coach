@@ -248,6 +248,18 @@ spend: **A14** right-sized model (Opus on small asks), **A15** session size
 session picked up again after the ~5-minute cache expired, which rewrites
 the whole context at the cache-write rate).
 
+Opt in to a live warning in the nudge hook with `[nudge] cost_warning = true`
+(or `PROMPT_COACH_NUDGE_COST_WARNING=1`). When the current session is past
+those limits it adds one line, at most once every 20 prompts
+(`cost_warning_every`), and never blocks or changes your prompt:
+
+```
+Session size: 258 calls, ~537k context, about USD 0.17 per reply (est.). Consider wrapping up and starting a fresh session.
+```
+
+It works for Claude Code and Hermes sessions. Off by default; when off it
+does no lookup at all.
+
 Figures are **estimates from list prices, not a bill**. Default prices cover
 current Claude models (dated in every report). A model with no price shows
 its tokens and `n/a`, never another model's price; `prompt-coach doctor`

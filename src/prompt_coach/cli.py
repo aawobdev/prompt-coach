@@ -1131,12 +1131,14 @@ def nudge():
     -- a hook failure would block every prompt or response."""
     import json as _json
 
-    from prompt_coach.nudge import build_response
+    from prompt_coach.nudge import _resolve_mode, build_response, with_cost_warning
 
     try:
         payload = _json.load(sys.stdin)
         cfg = load_config()
         response = build_response(payload, cfg)
+        if _resolve_mode(cfg, payload.get("cwd")) != "off":
+            response = with_cost_warning(response, payload, cfg)
     except Exception:
         response = {}
     typer.echo(_json.dumps(response))

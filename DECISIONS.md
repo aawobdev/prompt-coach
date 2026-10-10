@@ -1,5 +1,34 @@
 # Decisions & Changes - prompt-coach
 
+## 2026-10-10 - Cost layer, part 3: opt-in session-size warning in nudge
+
+**Decisions**:
+- `[nudge] cost_warning = false` by default; when off, `cost_warning()`
+  returns before any lookup, so the hook pays nothing.
+- **Live data, not the stale cache.** The spec asked for "a single indexed
+  read, no sync", but cache.db only changes when a command syncs, so it
+  never knows the current Claude Code session. The hook instead reads just
+  the transcript bytes added since its last read (same per-file offset as
+  sync, `CacheDB.sync_usage_file`), capped at a 30 ms slice; a first read
+  that runs over says nothing and finishes over later prompts. Then one
+  primary-key lookup. Hermes: one indexed read of `state.db` for the
+  session and its children. Measured: a 5.7 MB transcript reads in 41 ms
+  once; steady state adds ~3 ms per prompt; the lookup on a 100k-row table
+  takes 0.5 ms.
+- **Throttle**: at most once every `cost_warning_every` (20) prompts while
+  the session is over the A15 limits, counted in the existing
+  `nudge_state.json` (`cost_warning_counts`); `_record_nudge` now keeps
+  other keys instead of rewriting the file. Independent of coach mode's
+  once-per-session budget: it neither consumes nor waits for it.
+- **Add-only**: appended to `systemMessage` (Claude Code, shown to the user,
+  not added to the model's context) or `context` (Hermes pre_llm_call, the
+  only channel it has). Never on Stop/SessionStart, never when mode is off.
+- "~Nk context" and "per reply" use the latest call where the store records
+  calls; Hermes per-model totals fall back to averages.
+
+**Affects**: nudge.py, cache.py, config.py (`NudgeConfig`), stores/hermes.py
+(`iter_usage(session_id=...)`), cli.py (`nudge`).
+
 ## 2026-10-10 - Cost layer, part 2: session rules A14-A16, report and dash
 
 **Decisions**:
