@@ -1,6 +1,7 @@
 # Project Status - prompt-coach
-Last updated: 2026-10-10 by Claude (Opus 5.5): cost layer parts 1-2 (usage,
-pricing, `cost`, doctor; rules A14-A16, report and dash sections). 636 tests.
+Last updated: 2026-10-10 by Claude (Opus 5.5): cost layer parts 1-3 (usage,
+pricing, `cost`, doctor; rules A14-A16, report/dash; opt-in nudge warning).
+652 tests.
 
 ## Cost layer, part 1 (2026-10-10)
 
@@ -17,6 +18,9 @@ and the report/dash sections, (3) the opt-in nudge size warning.
   (no cold resume), spend-weighted; "Cost (est.)" in `report` and a Cost
   panel in `dash` (terminal + HTML). Dev scorecard: A14 0.61 fair, A15 0.05
   weak, A16 0.97 good.
+- Part 3: `[nudge] cost_warning` (off by default) adds one "Session size:"
+  line when the live session is over the A15 limits, at most every 20
+  prompts. ~3 ms per prompt in steady state.
 
 Open:
 - **Work-machine checklist** (spec L1-L5, read-only; report numbers, never

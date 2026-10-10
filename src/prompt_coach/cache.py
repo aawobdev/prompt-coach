@@ -367,35 +367,60 @@ class CacheDB:
             ),
         )
 
+    def sync_usage_file(
+        self, store, fpath: Path, *, force: bool = False, deadline: float | None = None
+    ) -> bool:
+        """Read one usage file from its saved offset. With a `deadline`
+        (time.monotonic()), stop at the first line past it and keep the offset
+        reached, so the live nudge can catch up a little per prompt. Returns
+        False when it stopped early."""
+        import time
+
+        st = fpath.stat()
+        key = f"usage:{fpath}"
+        row = (
+            None
+            if force
+            else self.conn.execute(
+                "SELECT mtime, size, offset FROM file_state WHERE path=?", (key,)
+            ).fetchone()
+        )
+        offset = 0
+        if row is not None:
+            if row["mtime"] == st.st_mtime and row["size"] == st.st_size:
+                return True
+            if st.st_size >= row["size"]:
+                offset = row["offset"]
+        last_offset, finished = offset, True
+        for line_offset, record in store.iter_usage_file(fpath, from_offset=offset):
+            self._upsert_usage(record)
+            last_offset = line_offset
+            if deadline is not None and time.monotonic() > deadline:
+                finished = False
+                break
+        # An early stop records size -1 so the next call never mistakes the
+        # file for unchanged; it resumes from last_offset.
+        self.conn.execute(
+            "INSERT OR REPLACE INTO file_state VALUES (?,?,?,?)",
+            (key, st.st_mtime, st.st_size if finished else -1, last_offset),
+        )
+        return finished
+
+    def session_usage(self, source: str, session_id: str) -> list[UsageRecord]:
+        """One session's records: a primary-key prefix lookup, cheap enough
+        for the live hook."""
+        rows = self.conn.execute(
+            "SELECT * FROM usage_records WHERE source=? AND session_id=?", (source, session_id)
+        ).fetchall()
+        return [self._row_to_usage(r) for r in rows]
+
     def _sync_usage(self, store, force: bool) -> None:
         """Usage for stores that record it. File stores resume per file from
         their own offsets (separate keys from the prompt offsets); DB stores
         use a last-seen watermark. Stores without usage are skipped."""
         if hasattr(store, "iter_usage_file"):
             for fpath in store.iter_usage_files():
-                st = fpath.stat()
-                key = f"usage:{fpath}"
-                row = (
-                    None
-                    if force
-                    else self.conn.execute(
-                        "SELECT mtime, size, offset FROM file_state WHERE path=?", (key,)
-                    ).fetchone()
-                )
-                offset = 0
-                if row is not None:
-                    if row["mtime"] == st.st_mtime and row["size"] == st.st_size:
-                        continue
-                    if st.st_size >= row["size"]:
-                        offset = row["offset"]
-                last_offset = offset
-                for line_offset, record in store.iter_usage_file(fpath, from_offset=offset):
-                    self._upsert_usage(record)
-                    last_offset = line_offset
-                self.conn.execute(
-                    "INSERT OR REPLACE INTO file_state VALUES (?,?,?,?)",
-                    (key, st.st_mtime, st.st_size, last_offset),
-                )
+                self.sync_usage_file(store, fpath, force=force)
         elif hasattr(store, "iter_usage"):
             key = f"usage-watermark:{store.kind.value}"
             since = None
@@ -432,26 +457,27 @@ class CacheDB:
         if sources:
             sql += f" AND source IN ({','.join('?' * len(sources))})"
             args.extend(sources)
-        return [
-            UsageRecord(
-                source=SourceKind(r["source"]),
-                session_id=r["session_id"],
-                record_key=r["record_key"],
-                first_ts=datetime.fromtimestamp(r["first_ts"], tz=UTC),
-                last_ts=datetime.fromtimestamp(r["last_ts"], tz=UTC),
-                model=r["model"],
-                calls=r["calls"],
-                input_tokens=r["input_tokens"],
-                cache_read_tokens=r["cache_read_tokens"],
-                cache_write_tokens=r["cache_write_tokens"],
-                cache_write_1h_tokens=r["cache_write_1h_tokens"],
-                output_tokens=r["output_tokens"],
-                cwd=r["cwd"],
-                overhead=bool(r["overhead"]),
-                store_cost_usd=r["store_cost_usd"],
-            )
-            for r in self.conn.execute(sql + " ORDER BY last_ts", args)
-        ]
+        return [self._row_to_usage(r) for r in self.conn.execute(sql + " ORDER BY last_ts", args)]
+
+    @staticmethod
+    def _row_to_usage(r: sqlite3.Row) -> UsageRecord:
+        return UsageRecord(
+            source=SourceKind(r["source"]),
+            session_id=r["session_id"],
+            record_key=r["record_key"],
+            first_ts=datetime.fromtimestamp(r["first_ts"], tz=UTC),
+            last_ts=datetime.fromtimestamp(r["last_ts"], tz=UTC),
+            model=r["model"],
+            calls=r["calls"],
+            input_tokens=r["input_tokens"],
+            cache_read_tokens=r["cache_read_tokens"],
+            cache_write_tokens=r["cache_write_tokens"],
+            cache_write_1h_tokens=r["cache_write_1h_tokens"],
+            output_tokens=r["output_tokens"],
+            cwd=r["cwd"],
+            overhead=bool(r["overhead"]),
+            store_cost_usd=r["store_cost_usd"],
+        )
 
     def sessions_by_source(self, since: datetime | None = None) -> dict[str, set[str]]:
         """Session ids with prompts in the window, per source -- the cost

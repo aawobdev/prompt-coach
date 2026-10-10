@@ -227,7 +227,9 @@ class HermesStore:
                 ).fetchone()
             )
 
-    def iter_usage(self, since: datetime | None = None) -> Iterator[UsageRecord]:
+    def iter_usage(
+        self, since: datetime | None = None, session_id: str | None = None
+    ) -> Iterator[UsageRecord]:
         """Per-session, per-model totals from `session_model_usage` (verified
         2026-10-10). Rows with a non-empty `task` (title_generation,
         background_review, vision, approval) and sub-agent sessions
@@ -246,10 +248,15 @@ class HermesStore:
                        u.first_seen, u.last_seen, s.cwd, s.parent_session_id
                 FROM session_model_usage u LEFT JOIN sessions s ON s.id = u.session_id
             """
-            args: tuple = ()
+            where, args = [], []
             if since is not None:
-                sql += " WHERE u.last_seen >= ?"
-                args = (since.timestamp(),)
+                where.append("u.last_seen >= ?")
+                args.append(since.timestamp())
+            if session_id is not None:  # the live nudge: this session and its children
+                where.append("(u.session_id = ? OR s.parent_session_id = ?)")
+                args += [session_id, session_id]
+            if where:
+                sql += " WHERE " + " AND ".join(where)
             for row in conn.execute(sql, args):
                 last = row["last_seen"] or row["first_seen"]
                 if last is None:

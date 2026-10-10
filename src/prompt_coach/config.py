@@ -136,6 +136,12 @@ class NudgeConfig:
     # (no block). False keeps the LLM-free self-refine directive. Any rewrite
     # failure falls back to that directive.
     auto_rewrite: bool = False
+    # Opt-in (2026-10-10): append a one-line session-size warning (calls,
+    # context, cost per reply) when the current session is over the A15
+    # limits, at most once every `cost_warning_every` prompts. Off = no
+    # lookup at all, so no added latency.
+    cost_warning: bool = False
+    cost_warning_every: int = 20
 
 
 # "off": model-fit analysis never runs.
@@ -274,6 +280,15 @@ def load_config(path: Path | None = None) -> Config:
     auto_rewrite = env(
         "NUDGE_AUTO_REWRITE", "true" if nudge_cfg.get("auto_rewrite", False) else "false"
     ).lower() in ("1", "true", "yes")
+    cost_warning = env(
+        "NUDGE_COST_WARNING", "true" if nudge_cfg.get("cost_warning", False) else "false"
+    ).lower() in ("1", "true", "yes")
+    cost_warning_every = int(
+        _non_negative(
+            "nudge.cost_warning_every",
+            env("NUDGE_COST_WARNING_EVERY", nudge_cfg.get("cost_warning_every", 20)),
+        )
+    )
 
     dir_overrides_raw = nudge_cfg.get("dir_overrides", {})
     if not isinstance(dir_overrides_raw, dict):
@@ -314,6 +329,8 @@ def load_config(path: Path | None = None) -> Config:
             llm_timeout=nudge_llm_timeout,
             dir_overrides=dir_overrides,
             auto_rewrite=auto_rewrite,
+            cost_warning=cost_warning,
+            cost_warning_every=max(cost_warning_every, 1),
         ),
         model_fit=ModelFitConfig(mode=model_fit_mode),
         cache_dir=cache_dir,
@@ -455,6 +472,10 @@ def write_config(cfg: Config, path: Path) -> None:
     ]
     if cfg.nudge.auto_rewrite:
         lines.append("auto_rewrite = true")
+    if cfg.nudge.cost_warning:
+        lines.append("cost_warning = true")
+    if cfg.nudge.cost_warning_every != 20:
+        lines.append(f"cost_warning_every = {cfg.nudge.cost_warning_every}")
     if cfg.nudge.dir_overrides:
         lines += ["", "[nudge.dir_overrides]"]
         lines += [
