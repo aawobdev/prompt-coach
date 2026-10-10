@@ -19,6 +19,9 @@ DEFAULT_API_BASE = ""
 DEFAULT_MODEL = ""
 
 
+_FORCE_COLOR_VARS = ("FORCE_COLOR", "CLICOLOR_FORCE", "PY_COLORS")
+
+
 class APIKeyCommandFailed(RuntimeError):
     """api_key_cmd failed, timed out, or printed nothing. The message never
     includes the command's output: it may hold a partial secret."""
@@ -50,6 +53,11 @@ class LLMConfig:
     def resolve_api_key(self, timeout: float = 10.0) -> str:
         if not self.api_key_cmd:
             return self.api_key
+        # The key must come back as plain text. A forced-colour environment
+        # (FORCE_COLOR, even empty) made a secrets CLI colourise its JSON and
+        # the key pipeline exit 4, silently disabling the LLM (2026-10-10).
+        cmd_env = {k: v for k, v in os.environ.items() if k not in _FORCE_COLOR_VARS}
+        cmd_env["NO_COLOR"] = "1"
         try:
             result = subprocess.run(  # noqa: S602 -- user's own configured command
                 self.api_key_cmd,
@@ -58,6 +66,7 @@ class LLMConfig:
                 text=True,
                 timeout=timeout,
                 check=False,
+                env=cmd_env,
             )
         except subprocess.TimeoutExpired:
             raise APIKeyCommandFailed(f"api_key_cmd timed out after {timeout}s") from None

@@ -161,6 +161,20 @@ def test_configured_needs_both_endpoint_and_model(clean_env, tmp_path):
     assert load_config(path).llm.configured
 
 
+@pytest.mark.parametrize("value", ["1", ""])
+def test_api_key_cmd_runs_without_forced_colour(clean_env, monkeypatch, tmp_path, value):
+    """FORCE_COLOR (even empty) made a real secrets CLI colourise its output
+    and the key pipeline fail, silently disabling the LLM."""
+    monkeypatch.setenv("FORCE_COLOR", value)
+    monkeypatch.setenv("CLICOLOR_FORCE", "1")
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[llm]\napi_key_cmd = "test -z \\"${FORCE_COLOR+x}${CLICOLOR_FORCE+x}\\" '
+        '&& test \\"$NO_COLOR\\" = 1 && echo plain-key"\n'
+    )
+    assert load_config(path).llm.resolve_api_key() == "plain-key"
+
+
 @pytest.mark.parametrize("cmd", ["exit 3", "true", "sleep 5"])
 def test_api_key_cmd_failure_raises_without_leaking_output(clean_env, tmp_path, cmd):
     path = tmp_path / "config.toml"
