@@ -1,5 +1,37 @@
 # Decisions & Changes - prompt-coach
 
+## 2026-10-10 - Cost layer, part 2: session rules A14-A16, report and dash
+
+**Decisions**:
+- **A14-A16 live in `analysis/session_rules.py`**, not `rubric.py`: they
+  score sessions, not prompts, and rubric.py imports the LLM client, which
+  `cost` must not pay for. A1-A13 are untouched.
+- **A15 session size**: 1.0 within both limits, 0.5 over one, 0.0 over both
+  (`context_warn_tokens` 100k per call, `calls_warn` 100).
+- **A16 no cold resume**: 1 - (calls after an idle gap over `idle_minutes`
+  whose own context is at least `context_warn_tokens`) / calls. Per-call
+  stores only (Claude Code); per-model totals score n/a, never 0.
+- **A14 right-sized model** reuses model fit's tiers per session: share of
+  classifiable prompts not overpowered (underpowered costs less, so it
+  counts as a fit). **Missing prompt models are filled from usage records**
+  (the first call at or after the prompt): only 282 of 3,999 recent Claude
+  Code prompts had a model linked, which left A14 covering 15 sessions;
+  with the fill it covers 208. The linking gap itself is a separate fix.
+- **Scorecard means are weighted by estimated spend.** Unweighted, 1,400
+  tiny Hermes sessions rated A15 0.91 "good" while 97% of spend sat in
+  oversized sessions; weighted it reads 0.05 "weak". Falls back to
+  unweighted when nothing scored has a price.
+- Report "Cost (est.)" section after Model Fit; dash panel (terminal and
+  HTML share the renderer); `cost` table gains A15/A16 columns and JSON
+  gains a14/a15/a16.
+
+**Validated on dev**: the longest session (1,087 calls, 438k context) scores
+A15 0.0; all 90 sessions with A14 below 0.5 are Opus-dominated.
+
+**Affects**: analysis/session_rules.py and analysis/cost_section.py (new),
+report/cost_view.py, report/dash.py, report/generator.py and the report
+template, models.py (`ReportData.cost`), cli.py (`report`, `dash`, `cost`).
+
 ## 2026-10-10 - Cost layer, part 1: usage, pricing, `cost` command
 
 **Trigger**: the maintainer's spend is driven by session size and model

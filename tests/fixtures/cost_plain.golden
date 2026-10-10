@@ -4,11 +4,11 @@ No usage data: claude-code (1 session)
 No price: gpt-oss (1 call)
 
 Top 4 sessions by cost
-#  Session  Store        Folder  Model       Calls  Ctx/call  Est USD
-1  s1       hermes       acme    sonnet-4-6     57       53k     9.25
-2  cc-1     claude-code  acme    sonnet-5        6      150k     0.31
-3  cc-2     claude-code  acme    opus-5-5        3       305     0.07
-4  cc-3     claude-code  acme    gpt-oss         1       305      n/a
+#  Session  Store        Folder  Model       Calls  Ctx/call  Est USD  A15   A16
+1  s1       hermes       acme    sonnet-4-6     57       53k     9.25  good  n/a
+2  cc-1     claude-code  acme    sonnet-5        6      150k     0.31  fair  good
+3  cc-2     claude-code  acme    opus-5-5        3       305     0.07  good  good
+4  cc-3     claude-code  acme    gpt-oss         1       305      n/a  good  good
 
 Total: USD 9.62 est. · overhead (sub-agents, background tasks) USD 1.25 · Opus/Fable 53% · sessions over 100k context: 1 of 4 = 3% of spend
 Biggest lever: Opus/Fable models carry 53% of est. spend. Try a Sonnet-tier model for routine work (model fit flags the overpowered prompts).
