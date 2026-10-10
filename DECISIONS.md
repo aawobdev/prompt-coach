@@ -1,5 +1,19 @@
 # Decisions & Changes - prompt-coach
 
+## 2026-10-10 - api_key_cmd runs without forced colour
+
+**Trigger**: found while generating README screenshots with `FORCE_COLOR=1`.
+With that variable present at all (even empty), the maintainer's
+secrets-manager key command exited 4, so `_make_llm` returned None and nudge
+silently let every prompt through with no rewrite. Nothing surfaced it: the
+hook must never fail loudly.
+
+**Decision**: `resolve_api_key` runs the command with `FORCE_COLOR`,
+`CLICOLOR_FORCE` and `PY_COLORS` removed and `NO_COLOR=1` set. A key has to
+come back as plain text, so no key command should ever want colour.
+
+**Affects**: config.py, tests/test_config.py.
+
 ## 2026-10-10 - Drop the openai SDK: one plain httpx POST
 
 **Trigger**: Dependabot PR #28 (openai 1.109 -> 3.x). openai 3 swaps httpx
