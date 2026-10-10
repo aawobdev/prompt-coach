@@ -17,7 +17,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from prompt_coach.models import Prompt, PromptOrigin, SourceKind, SyncStats
+from prompt_coach.models import Prompt, PromptOrigin, SourceKind, SyncStats, UsageRecord
 from prompt_coach.stores.base import SessionStore
 
 _SCHEMA = """\
@@ -67,6 +67,25 @@ CREATE TABLE IF NOT EXISTS llm_cache (
     template_version TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS usage_records (
+    source TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    record_key TEXT NOT NULL,
+    first_ts REAL NOT NULL,
+    last_ts REAL NOT NULL,
+    model TEXT,
+    calls INTEGER NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    cache_write_tokens INTEGER NOT NULL,
+    cache_write_1h_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cwd TEXT,
+    overhead INTEGER NOT NULL,
+    store_cost_usd REAL,
+    PRIMARY KEY (source, session_id, record_key)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_records(last_ts);
 CREATE VIRTUAL TABLE IF NOT EXISTS prompts_fts USING fts5(
     content, content='prompts', content_rowid='rowid'
 );
@@ -193,6 +212,7 @@ class CacheDB:
         stores: Sequence[SessionStore],
         force: bool = False,
         on_store: Callable[[str, bool], None] | None = None,
+        usage: bool = True,
     ) -> SyncStats:
         """`on_store(kind, done)` fires (False) right before a store starts and
         (True) right after -- lets a caller show per-store progress. One store
@@ -216,6 +236,11 @@ class CacheDB:
                         self._record_parser_version(store)
                 except Exception as exc:  # noqa: BLE001 - one bad store must not kill sync
                     stats.stores_failed[store.kind.value] = type(exc).__name__
+                try:
+                    if usage:
+                        self._sync_usage(store, force)
+                except Exception as exc:  # noqa: BLE001 - usage is optional, prompts still count
+                    stats.usage_failed[store.kind.value] = type(exc).__name__
             if on_store:
                 on_store(store.kind.value, True)
         self.conn.commit()
@@ -317,7 +342,129 @@ class CacheDB:
             (key, 0.0, 0, int(latest * 1000)),
         )
 
+    def _upsert_usage(self, r: UsageRecord) -> None:
+        # Upsert, not insert-or-ignore: a Claude Code reply streamed as several
+        # lines keeps its last (final) counts, and Hermes/Copilot CLI totals
+        # grow in place as a session continues.
+        self.conn.execute(
+            "INSERT OR REPLACE INTO usage_records VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                r.source.value,
+                r.session_id,
+                r.record_key,
+                r.first_ts.timestamp(),
+                r.last_ts.timestamp(),
+                r.model,
+                r.calls,
+                r.input_tokens,
+                r.cache_read_tokens,
+                r.cache_write_tokens,
+                r.cache_write_1h_tokens,
+                r.output_tokens,
+                r.cwd,
+                int(r.overhead),
+                r.store_cost_usd,
+            ),
+        )
+
+    def _sync_usage(self, store, force: bool) -> None:
+        """Usage for stores that record it. File stores resume per file from
+        their own offsets (separate keys from the prompt offsets); DB stores
+        use a last-seen watermark. Stores without usage are skipped."""
+        if hasattr(store, "iter_usage_file"):
+            for fpath in store.iter_usage_files():
+                st = fpath.stat()
+                key = f"usage:{fpath}"
+                row = (
+                    None
+                    if force
+                    else self.conn.execute(
+                        "SELECT mtime, size, offset FROM file_state WHERE path=?", (key,)
+                    ).fetchone()
+                )
+                offset = 0
+                if row is not None:
+                    if row["mtime"] == st.st_mtime and row["size"] == st.st_size:
+                        continue
+                    if st.st_size >= row["size"]:
+                        offset = row["offset"]
+                last_offset = offset
+                for line_offset, record in store.iter_usage_file(fpath, from_offset=offset):
+                    self._upsert_usage(record)
+                    last_offset = line_offset
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO file_state VALUES (?,?,?,?)",
+                    (key, st.st_mtime, st.st_size, last_offset),
+                )
+        elif hasattr(store, "iter_usage"):
+            key = f"usage-watermark:{store.kind.value}"
+            since = None
+            if not force:
+                row = self.conn.execute(
+                    "SELECT offset FROM file_state WHERE path=?", (key,)
+                ).fetchone()
+                if row is not None:
+                    since = datetime.fromtimestamp(row["offset"] / 1000.0, tz=UTC)
+            latest = since.timestamp() if since else 0.0
+            for record in store.iter_usage(since=since):
+                self._upsert_usage(record)
+                latest = max(latest, record.last_ts.timestamp())
+            self.conn.execute(
+                "INSERT OR REPLACE INTO file_state VALUES (?,?,?,?)",
+                (key, 0.0, 0, int(latest * 1000)),
+            )
+
     # -- queries ------------------------------------------------------------
+
+    def usage_records(
+        self,
+        *,
+        since: datetime | None = None,
+        sources: Sequence[str] | None = None,
+    ) -> list[UsageRecord]:
+        """Records whose last activity falls in the window. A session that
+        spans the window edge contributes its in-window records only."""
+        sql = "SELECT * FROM usage_records WHERE 1=1"
+        args: list = []
+        if since is not None:
+            sql += " AND last_ts >= ?"
+            args.append(since.timestamp())
+        if sources:
+            sql += f" AND source IN ({','.join('?' * len(sources))})"
+            args.extend(sources)
+        return [
+            UsageRecord(
+                source=SourceKind(r["source"]),
+                session_id=r["session_id"],
+                record_key=r["record_key"],
+                first_ts=datetime.fromtimestamp(r["first_ts"], tz=UTC),
+                last_ts=datetime.fromtimestamp(r["last_ts"], tz=UTC),
+                model=r["model"],
+                calls=r["calls"],
+                input_tokens=r["input_tokens"],
+                cache_read_tokens=r["cache_read_tokens"],
+                cache_write_tokens=r["cache_write_tokens"],
+                cache_write_1h_tokens=r["cache_write_1h_tokens"],
+                output_tokens=r["output_tokens"],
+                cwd=r["cwd"],
+                overhead=bool(r["overhead"]),
+                store_cost_usd=r["store_cost_usd"],
+            )
+            for r in self.conn.execute(sql + " ORDER BY last_ts", args)
+        ]
+
+    def sessions_by_source(self, since: datetime | None = None) -> dict[str, set[str]]:
+        """Session ids with prompts in the window, per source -- the cost
+        report's "no usage data" line compares these against usage sessions."""
+        sql = "SELECT DISTINCT source, session_id FROM prompts"
+        args: list = []
+        if since is not None:
+            sql += " WHERE timestamp >= ?"
+            args.append(since.timestamp())
+        out: dict[str, set[str]] = {}
+        for row in self.conn.execute(sql, args):
+            out.setdefault(row["source"], set()).add(row["session_id"])
+        return out
 
     @staticmethod
     def _row_to_prompt(row: sqlite3.Row) -> Prompt:
@@ -423,7 +570,7 @@ class CacheDB:
     def clear(self) -> None:
         self.conn.executescript(
             "DELETE FROM prompts; DELETE FROM prompts_fts;"
-            " DELETE FROM file_state; DELETE FROM llm_cache;"
+            " DELETE FROM file_state; DELETE FROM llm_cache; DELETE FROM usage_records;"
             " DELETE FROM audit_log;"
         )
         self.conn.commit()

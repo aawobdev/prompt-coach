@@ -38,6 +38,7 @@ class SourceKind(StrEnum):
     CLAUDE_CODE = "claude-code"
     COPILOT = "copilot"
     CODEX = "codex"
+    COPILOT_CLI = "copilot-cli"
     CHATGPT = "chatgpt"
     JSON_IMPORT = "json-import"
 
@@ -82,6 +83,7 @@ class SyncStats:
     deduped: int = 0
     skipped_malformed: int = 0
     stores_failed: dict[str, str] = field(default_factory=dict)
+    usage_failed: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -195,6 +197,66 @@ class ModelFitSummary:
     eligible: int  # human, non-micro-reply prompts considered
     coverage: int  # of eligible, how many had a classifiable model tier
     models_seen: dict[str, tuple[str, ...]]  # source.value -> distinct models observed
+
+
+@dataclass(frozen=True)
+class UsageRecord:
+    """Token usage as a store records it: one API call (Claude Code, deduped by
+    request id) or one per-model session total (Hermes, Copilot CLI). Counts,
+    model names and the folder only -- never prompt content (privacy rule)."""
+
+    source: SourceKind
+    session_id: str
+    record_key: str  # unique within the session: request id, or "model|task|..."
+    first_ts: datetime  # UTC-aware
+    last_ts: datetime
+    model: str | None
+    calls: int
+    input_tokens: int  # uncached input
+    cache_read_tokens: int
+    cache_write_tokens: int  # 5-minute (or unsplit) cache writes
+    output_tokens: int
+    cache_write_1h_tokens: int = 0  # 1-hour cache writes, billed at 2x input
+    cwd: str | None = None
+    overhead: bool = False  # sub-agent, title generation, background review
+    store_cost_usd: float | None = None  # the store's own list-price estimate
+
+    @property
+    def context_tokens(self) -> int:
+        return (
+            self.input_tokens
+            + self.cache_read_tokens
+            + self.cache_write_tokens
+            + self.cache_write_1h_tokens
+        )
+
+
+@dataclass(frozen=True)
+class SessionUsage:
+    """One session's usage, aggregated from its UsageRecords."""
+
+    source: SourceKind
+    session_id: str
+    model: str | None  # dominant model by calls
+    api_calls: int
+    input_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int  # 5-minute and 1-hour writes together
+    output_tokens: int
+    first_ts: datetime
+    last_ts: datetime
+    cwd: str | None
+    max_gap_seconds: int | None  # None unless the store records each call
+    models: tuple[tuple[str, int], ...]  # (model, calls), most calls first
+    overhead_calls: int = 0
+    est_cost: float | None = None  # in the configured currency; None = nothing priced
+    overhead_cost: float = 0.0
+    unpriced_calls: int = 0  # calls whose model has no price (cost is partial)
+
+    @property
+    def context_per_call(self) -> float:
+        total = self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
+        return total / self.api_calls if self.api_calls else 0.0
 
 
 @dataclass(frozen=True)

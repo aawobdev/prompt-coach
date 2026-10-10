@@ -1,5 +1,51 @@
 # Decisions & Changes - prompt-coach
 
+## 2026-10-10 - Cost layer, part 1: usage, pricing, `cost` command
+
+**Trigger**: the maintainer's spend is driven by session size and model
+choice, not prompt wording, and prompt-coach had no token or money data.
+Built from a cost spec written against the maintainer's work machine (not
+committed: it names work projects and billing terms).
+
+**Decisions**:
+- **Per-call usage rows, not one row per session.** The spec proposed a
+  `session_usage` table keyed by session. Claude Code needs per-call dedupe
+  (51% of usage lines are streamed duplicates, plus calls copied into a
+  second file on resume) and rule A16 (cold resumes) needs per-call
+  timestamps. `usage_records` is keyed (source, session, record_key) and
+  upserted; `SessionUsage` is aggregated on read. Hermes and Copilot CLI
+  only give per-model totals, so they store one row per model.
+- **Hermes's own `estimated_cost_usd`** is used when `cost_status` is
+  `estimated` (owner's choice); otherwise the price table. Covers DeepSeek
+  and other OpenRouter models with no price config.
+- **Overhead folded in and shown as a line** (owner's choice): Claude Code
+  sub-agent transcripts and sidechain calls, Hermes `task != ''` rows and
+  child sessions all count toward their parent session.
+- **Copilot CLI in v1, unverified** (owner's choice): a usage-only store
+  (`copilot-cli`); setup only offers it where it is installed.
+- **Default prices from Anthropic's reference (2026-10-06), not the spec.**
+  The spec priced all Opus at $5/$25 and all Sonnet at $3/$15; Opus 5.5 is
+  $4/$20 and Sonnet 5/5.5 are $2/$10, so a single family glob overstates
+  them by 20-33%. Patterns are per version, most specific first; Opus 4.1
+  and older stay unpriced rather than guessed. 1-hour cache writes are
+  priced at 2x input (Claude Code records them separately).
+- **Neutral public defaults**: USD, `billed_fraction = 1.0`. The owner's own
+  currency, rate and billed fraction belong in their config. `doctor` warns
+  while the fraction is still 1.0.
+- **No session titles** in cost output: Hermes titles are generated from
+  prompt text, which the privacy rule keeps out. Session id + folder only.
+- `usd_to_eur` is accepted as a spelling of `usd_rate`. No weekly summaries.
+
+**Validated on dev** (Claude Code + Hermes, 30 days): totals within 1.9% of
+the spec's reference parser priced with the same table. The top-5 sets
+differ only because the reference dedupes per file (double counting a
+resumed session, $157.52 vs $79.11) and keeps the first streamed duplicate.
+Repeat `cost` run: 1.5 s.
+
+**Affects**: models.py, pricing.py (new), config.py, cache.py,
+stores/{claude_code,hermes,copilot_cli}.py, analysis/cost.py (new),
+report/cost_view.py (new), cli.py (`cost`, `doctor`, `setup`).
+
 ## 2026-10-10 - api_key_cmd runs without forced colour
 
 **Trigger**: found while generating README screenshots with `FORCE_COLOR=1`.

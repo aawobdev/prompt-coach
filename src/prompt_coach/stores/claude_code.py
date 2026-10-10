@@ -27,6 +27,14 @@ reply is seen or the next prompt/EOF arrives, at which point it is
 flushed (with model=None if nothing matched). `<synthetic>` is a
 placeholder value Claude Code emits for some internal turns, not a real
 model, and is filtered out at the source.
+
+Usage (2026-10-10): every `type: "assistant"` line carries `message.usage`,
+but a streamed reply is written several times with the same `requestId`
+(51% of 137k usage lines on the maintainer's machine). Usage is keyed by
+request id and the last line wins: where duplicates differ, the last one
+has the final output count. Sub-agent transcripts live in
+`<project>/<session>/subagents/*.jsonl` and carry the parent's sessionId,
+so their calls fold into the parent session as overhead.
 """
 
 from __future__ import annotations
@@ -38,7 +46,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-from prompt_coach.models import Prompt, SourceKind, StoreInfo
+from prompt_coach.models import Prompt, SourceKind, StoreInfo, UsageRecord
 from prompt_coach.stores.base import classify_origin, content_hash, is_harness_wrapped
 
 _SYSTEM_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
@@ -107,6 +115,61 @@ def parse_line(line: str) -> Prompt | None:
         origin=classify_origin(content),
         cwd=obj.get("cwd"),
         git_repo=obj.get("cwd"),
+    )
+
+
+def _int(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def parse_usage_line(line: str, *, in_subagent_file: bool = False) -> UsageRecord | None:
+    """One assistant line's token usage, or None when it carries none. Counts,
+    model and folder only: message content is never read into the record."""
+    if '"usage"' not in line:
+        return None
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict) or obj.get("type") != "assistant":
+        return None
+    message = obj.get("message") or {}
+    usage = message.get("usage") if isinstance(message, dict) else None
+    model = message.get("model") if isinstance(message, dict) else None
+    if not isinstance(usage, dict) or model == "<synthetic>":
+        return None
+    key = obj.get("requestId") or message.get("id")
+    session_id = obj.get("sessionId")
+    raw_ts = obj.get("timestamp")
+    if not key or not session_id or not isinstance(raw_ts, str):
+        return None
+    try:
+        ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    split = usage.get("cache_creation")
+    if isinstance(split, dict):
+        write_5m = _int(split.get("ephemeral_5m_input_tokens"))
+        write_1h = _int(split.get("ephemeral_1h_input_tokens"))
+    else:
+        write_5m, write_1h = _int(usage.get("cache_creation_input_tokens")), 0
+    return UsageRecord(
+        source=SourceKind.CLAUDE_CODE,
+        session_id=str(session_id),
+        record_key=str(key),
+        first_ts=ts,
+        last_ts=ts,
+        model=model if isinstance(model, str) else None,
+        calls=1,
+        input_tokens=_int(usage.get("input_tokens")),
+        cache_read_tokens=_int(usage.get("cache_read_input_tokens")),
+        cache_write_tokens=write_5m,
+        cache_write_1h_tokens=write_1h,
+        output_tokens=_int(usage.get("output_tokens")),
+        cwd=obj.get("cwd") if isinstance(obj.get("cwd"), str) else None,
+        overhead=bool(obj.get("isSidechain")) or in_subagent_file,
     )
 
 
@@ -179,6 +242,30 @@ class ClaudeCodeStore:
                         pending = None
             if pending is not None:
                 yield pending
+
+    def iter_usage_files(self) -> Iterator[Path]:
+        """Main transcripts plus sub-agent transcripts (prompts skip the latter)."""
+        yield from self.iter_files()
+        yield from sorted(self.projects_dir.glob("*/*/subagents/*.jsonl"))
+
+    def iter_usage_file(
+        self, path: Path, from_offset: int = 0
+    ) -> Iterator[tuple[int, UsageRecord]]:
+        """Yield (byte_offset_after_line, record), resumable like iter_file.
+        Duplicates are not collapsed here: the cache upserts on
+        (session, request id), so the last line wins across syncs too."""
+        in_subagent_file = path.parent.name == "subagents"
+        with open(path, "rb") as f:
+            if from_offset:
+                f.seek(from_offset)
+            offset = from_offset
+            for raw in f:
+                offset += len(raw)
+                record = parse_usage_line(
+                    raw.decode("utf-8", errors="replace"), in_subagent_file=in_subagent_file
+                )
+                if record is not None:
+                    yield offset, record
 
     def iter_prompts(self, since: datetime | None = None) -> Iterator[Prompt]:
         for path in self.iter_files():
