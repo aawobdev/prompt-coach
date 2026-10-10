@@ -247,8 +247,9 @@ class CacheDB:
         return stats
 
     def _parser_changed(self, store) -> bool:
-        """True (after purging the store's cached rows) when the store's
-        parser_version differs from the one its rows were parsed with.
+        """True (after purging the store's cached rows, unless the store sets
+        purge_on_reparse = False) when the store's parser_version differs
+        from the one its rows were parsed with.
 
         Rows are INSERT OR IGNORE on (source, session_id, message_ref), so
         a forced sync alone never rewrites a row a changed parser now reads
@@ -261,8 +262,11 @@ class CacheDB:
         ).fetchone()
         if (row["offset"] if row else 1) == version:
             return False
-        self.conn.execute("DELETE FROM prompts WHERE source=?", (store.kind.value,))
-        self.conn.execute("INSERT INTO prompts_fts(prompts_fts) VALUES('rebuild')")
+        if getattr(store, "purge_on_reparse", True):
+            self.conn.execute("DELETE FROM prompts WHERE source=?", (store.kind.value,))
+            self.conn.execute("INSERT INTO prompts_fts(prompts_fts) VALUES('rebuild')")
+        # else: a forced re-read fills changed fields in place (see _insert),
+        # keeping rows whose source files no longer exist.
         return True
 
     def _record_parser_version(self, store) -> None:
@@ -296,6 +300,12 @@ class CacheDB:
             )
         else:
             stats.deduped += 1
+            if p.model:  # a re-read can now link a model the first read missed
+                self.conn.execute(
+                    "UPDATE prompts SET model=? WHERE source=? AND session_id=?"
+                    " AND message_ref=? AND model IS NULL",
+                    (p.model, p.source.value, p.session_id, p.message_ref),
+                )
 
     def _sync_by_files(self, store, stats: SyncStats, force: bool) -> None:
         """Per-file incremental sync for file-based stores (Claude Code JSONL)."""

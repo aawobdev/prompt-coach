@@ -1,7 +1,15 @@
 # Project Status - prompt-coach
-Last updated: 2026-10-10 by Claude (Opus 5.5): cost layer parts 1-3 (usage,
-pricing, `cost`, doctor; rules A14-A16, report/dash; opt-in nudge warning).
-652 tests.
+Last updated: 2026-10-10 by Claude (Opus 5.5): Claude Code prompts now link
+to the model that answered (7% -> 100%), after the cost layer (parts 1-3).
+657 tests.
+
+## Claude Code model linking (2026-10-10)
+
+Replies are found through the parentUuid chain (attachments sit between
+prompt and reply). The first sync after upgrading re-reads Claude Code
+transcripts once (~6 s) and fills models in place; no cached prompts are
+dropped. Expect Model Fit to report far more mismatches (49 -> 1,077 on
+dev): it now sees 2,681 prompts instead of 143.
 
 ## Cost layer, part 1 (2026-10-10)
 

@@ -42,6 +42,13 @@ tool, and any OpenAI-compatible endpoint (or none) for the LLM features.
   harness-wrapped content (`<bash-input>`, `<artifact-view-context>`, etc.)
   that `origin.kind=human` doesn't catch either; `is_harness_wrapped`
   rejects those regardless of `promptSource`.
+  Reply linking (verified live 2026-10-10): `type=attachment` lines (hook
+  output, context) sit between a prompt and its reply, and the reply's
+  `parentUuid` points at the last one; follow the parentUuid chain, never
+  just the direct parent (4 of 2,171 recent prompts linked directly).
+  Claude Code deletes transcripts after ~30 days, so its cached prompts are
+  never purged on a parser bump (`purge_on_reparse = False`): the re-read
+  fills changed fields in place.
 - **Copilot Chat**: `/mnt/c/.../workspaceStorage/<ws>/chatSessions/*.jsonl`
   (JSON-patch event log; verified live 2026-07-20).
 - **Codex CLI**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (`/mnt/c` on
