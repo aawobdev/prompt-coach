@@ -79,6 +79,7 @@ def default_stores(cfg: Config) -> list:
     from prompt_coach.stores.claude_code import ClaudeCodeStore
     from prompt_coach.stores.codex_cli import CodexStore
     from prompt_coach.stores.copilot import CopilotStore
+    from prompt_coach.stores.copilot_cli import CopilotCliStore
     from prompt_coach.stores.hermes import HermesStore
 
     candidates = [
@@ -86,6 +87,7 @@ def default_stores(cfg: Config) -> list:
         ClaudeCodeStore(cfg.stores.claude_projects_dir),
         CopilotStore(cfg.stores.copilot_dir),
         CodexStore(cfg.stores.codex_dir),
+        CopilotCliStore(cfg.stores.copilot_cli_dir),
     ]
     # Opt-in: a store present on disk is only used if named in cfg.stores.enabled
     # (DECISIONS.md 2026-07-29).
@@ -107,8 +109,9 @@ def sync_with_progress(cache: CacheDB, cfg: Config, *, force: bool = False):
 
     stores = default_stores(cfg)
     progress_console = Console(stderr=True)
+    usage = cfg.cost.enabled
     if not progress_console.is_terminal:
-        return cache.sync(stores, force=force)
+        return cache.sync(stores, force=force, usage=usage)
     with Progress(
         SpinnerColumn(),
         TextColumn("[dim]syncing {task.fields[store]}[/]"),
@@ -125,7 +128,7 @@ def sync_with_progress(cache: CacheDB, cfg: Config, *, force: bool = False):
             else:
                 progress.update(task, store=kind)
 
-        return cache.sync(stores, force=force, on_store=on_store)
+        return cache.sync(stores, force=force, on_store=on_store, usage=usage)
 
 
 def make_llm(cfg: Config) -> LocalLLM | None:
@@ -204,6 +207,8 @@ def doctor(json_format: bool = typer.Option(False, "--json", help="Output as JSO
     plugin_enabled = is_plugin_enabled(claude_home)
     plan = plan_migration(claude_home)
     double_fire = plugin_enabled and plan.has_legacy_hooks
+    cfg = load_config()
+    cost_checks = _cost_checks(cfg) if cfg.cost.enabled else []
 
     if json_format:
         typer.echo(
@@ -217,6 +222,7 @@ def doctor(json_format: bool = typer.Option(False, "--json", help="Output as JSO
                     ],
                     "legacy_commands": [str(p) for p in plan.legacy_command_files],
                     "double_fire_risk": double_fire,
+                    "cost": [{"level": lvl, "message": msg} for lvl, msg in cost_checks],
                 }
             )
         )
@@ -253,6 +259,69 @@ def doctor(json_format: bool = typer.Option(False, "--json", help="Output as JSO
         )
     else:
         typer.echo("All good -- plugin installed, no legacy hooks or commands left.")
+    if cost_checks:
+        typer.echo("\nCost")
+        for level, message in cost_checks:
+            typer.echo(f"  [{level}]{' ' * (5 - len(level))} {message}")
+
+
+def _cost_checks(cfg: Config) -> list[tuple[str, str]]:
+    """Read-only cost health: usage per store (from the cache), models with no
+    price, a billed_fraction left at the 1.0 default, and price-table age."""
+    from datetime import date
+
+    from prompt_coach.analysis.cost import record_cost
+    from prompt_coach.pricing import normalise_model
+
+    checks: list[tuple[str, str]] = []
+    cache = open_cache(cfg)
+    records = cache.usage_records()
+    cache.close()
+    sessions: dict[str, set[str]] = {}
+    unpriced: dict[str, set[str]] = {}
+    for r in records:
+        sessions.setdefault(r.source.value, set()).add(r.session_id)
+        if record_cost(r, cfg.cost) is None:
+            name = normalise_model(r.model) if r.model else "(unknown)"
+            unpriced.setdefault(name, set()).add(r.session_id)
+    for store in default_stores(cfg):
+        kind = store.kind.value
+        records_usage = hasattr(store, "iter_usage") or hasattr(store, "iter_usage_file")
+        if not records_usage:
+            checks.append(("ok", f"{kind}: records no token usage (cost shows n/a)"))
+        elif kind in sessions:
+            n = len(sessions[kind])
+            checks.append(("ok", f"{kind} usage: {n} session{'s' * (n != 1)} readable"))
+        elif kind == "hermes" and not getattr(store, "has_usage_table", lambda: True)():
+            checks.append(("warn", "hermes: no session_model_usage table in state.db"))
+        else:
+            checks.append(("warn", f"{kind}: no usage cached yet (run `prompt-coach cache sync`)"))
+    if unpriced:
+        top = sorted(unpriced.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+        names = ", ".join(f"{m} ({len(ids)} session{'s' * (len(ids) != 1)})" for m, ids in top[:5])
+        more = f" +{len(top) - 5} more" if len(top) > 5 else ""
+        checks.append(
+            (
+                "warn",
+                f'models with no price: {names}{more} -> add [cost.prices."<model>*"]',
+            )
+        )
+    if cfg.cost.billed_fraction == 1.0 and not cfg.cost.billed_fraction_by_store:
+        checks.append(
+            (
+                "warn",
+                "billed_fraction is 1.0 (default): figures assume full list price"
+                " and will overstate a discounted bill",
+            )
+        )
+    try:
+        age = (date.today() - date.fromisoformat(cfg.cost.price_table_date)).days
+    except ValueError:
+        checks.append(("warn", f"price_table_date {cfg.cost.price_table_date!r} is not a date"))
+    else:
+        level = "warn" if age > 90 else "ok"
+        checks.append((level, f"price table {cfg.cost.price_table_date} ({age} days old)"))
+    return checks
 
 
 def _json_dumps(data: dict) -> str:
@@ -476,6 +545,7 @@ def _setup_wizard():
     from prompt_coach.stores.claude_code import ClaudeCodeStore
     from prompt_coach.stores.codex_cli import CodexStore
     from prompt_coach.stores.copilot import CopilotStore
+    from prompt_coach.stores.copilot_cli import CopilotCliStore
     from prompt_coach.stores.hermes import HermesStore
 
     cfg = load_config()
@@ -487,11 +557,16 @@ def _setup_wizard():
         "claude-code": ClaudeCodeStore(cfg.stores.claude_projects_dir),
         "copilot": CopilotStore(cfg.stores.copilot_dir),
         "codex": CodexStore(cfg.stores.codex_dir),
+        "copilot-cli": CopilotCliStore(cfg.stores.copilot_cli_dir),
     }
     enabled: set[str] = set()
     for kind, store in stores_by_kind.items():
         info = store.discover()
         was_enabled = kind in cfg.stores.enabled
+        if kind == "copilot-cli" and not info.available:
+            # Usage-only store: only worth a question where it's installed.
+            # Absent means disabled, the same default the other stores get.
+            continue
         if info.available:
             detail = f"found, {info.session_count} sessions" if info.session_count else "found"
         else:
@@ -564,10 +639,12 @@ def _setup_wizard():
             copilot_dir=cfg.stores.copilot_dir,
             codex_dir=cfg.stores.codex_dir,
             enabled=frozenset(enabled),
+            copilot_cli_dir=cfg.stores.copilot_cli_dir,
         ),
         nudge=dataclasses.replace(cfg.nudge, mode=nudge_mode, dir_overrides=dir_overrides),
         model_fit=ModelFitConfig(mode=model_fit_mode),
         cache_dir=cfg.cache_dir,
+        cost=cfg.cost,
     )
     path = config_file_path()
     write_config(new_cfg, path)
@@ -1077,6 +1154,63 @@ def score(
                 typer.echo(f"  {pts}  {label}")
         if not result["bonuses"] and not result["penalties"]:
             typer.echo("  No significant signals detected.")
+
+
+@app.command()
+def cost(
+    since: str | None = typer.Option("30d", "--since", help="Time range (default 30d)"),
+    by: str = typer.Option("session", "--by", help="session | folder | model | store | day"),
+    top: int = typer.Option(10, "--top", min=1, help="Sessions to list with --by session"),
+    source: str | None = typer.Option(
+        None, "--source", help="Comma-separated stores, e.g. hermes,claude-code"
+    ),
+    json_format: bool = typer.Option(False, "--json", help="Output as JSON"),
+    plain: bool = typer.Option(False, "--plain", help="Force plain text output"),
+    no_sync: bool = typer.Option(False, "--no-sync", help="Skip store sync, use the cache as-is"),
+):
+    """Estimated spend from token usage, by session, folder, model, store or day.
+    Deterministic and local: list prices x [cost] billed_fraction. Not a bill."""
+    import json as _json
+
+    from prompt_coach.analysis.cost import GROUP_KEYS, group_costs, summarise
+    from prompt_coach.report import cost_view
+
+    if by not in GROUP_KEYS:
+        raise typer.BadParameter(f"--by must be one of {', '.join(GROUP_KEYS)}")
+    cfg = load_config()
+    if not cfg.cost.enabled:
+        typer.echo("Cost estimates are off ([cost] enabled = false in config.toml).")
+        return
+    cache = open_cache(cfg)
+    if not no_sync:
+        sync_with_progress(cache, cfg)
+    since_dt = parse_since(since)
+    label = _since_label(since, since_dt)
+    sources = [s.strip() for s in source.split(",") if s.strip()] if source else None
+    records = cache.usage_records(since=since_dt, sources=sources)
+    prompt_sessions = cache.sessions_by_source(since=since_dt)
+    if sources:
+        prompt_sessions = {k: v for k, v in prompt_sessions.items() if k in sources}
+    if not records:
+        if json_format:
+            typer.echo(_json.dumps({"window": {"since": str(since_dt)}, "sessions": []}))
+            return
+        typer.echo(f"Cost · {label} · no usage data.")
+        typer.echo(
+            "None of the enabled stores recorded token usage in this window"
+            " (Claude Code, Hermes and Copilot CLI do). Try a wider --since."
+        )
+        return
+    summary = summarise(records, cfg.cost, since=since_dt, prompt_sessions=prompt_sessions)
+    groups = group_costs(records, by, cfg.cost) if by != "session" else ()
+    if json_format:
+        typer.echo(_json.dumps(cost_view.to_json(summary, by=by, top=top, groups=groups)))
+    elif plain:
+        typer.echo(cost_view.render_plain(summary, label, by=by, top=top, groups=groups))
+    else:
+        from rich.console import Console
+
+        Console().print(cost_view.render_rich(summary, label, by=by, top=top, groups=groups))
 
 
 @app.command("streaks")

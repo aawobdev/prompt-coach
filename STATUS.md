@@ -1,7 +1,33 @@
 # Project Status - prompt-coach
-Last updated: 2026-10-10 by Claude (Opus 5.5): repo is public
-(https://github.com/aawobdev/prompt-coach). Open-source prep merged as #24.
-534 tests.
+Last updated: 2026-10-10 by Claude (Opus 5.5): cost layer part 1 (usage
+readers, pricing, `cost` command, doctor checks). 620 tests.
+
+## Cost layer, part 1 (2026-10-10)
+
+Details in DECISIONS.md 2026-10-10. Built from the maintainer's cost spec in
+three PRs: (1) usage + pricing + `cost` + doctor (this), (2) rules A14-A16
+and the report/dash sections, (3) the opt-in nudge size warning.
+- Usage from Claude Code (per call, deduped), Hermes (per model, with its
+  own cost estimate) and Copilot CLI (unverified). Cached per call in
+  `usage_records`.
+- `prompt-coach cost [--since 30d] [--by session|folder|model|store|day]`.
+- Dev, 30 days: 1,824 sessions, USD 3,541 est. at list price; within 1.9%
+  of the reference parser.
+
+Open:
+- **Work-machine checklist** (spec L1-L5, read-only; report numbers, never
+  prompt text):
+  1. `prompt-coach cost --since 30d --json` vs the reference script:
+     totals within 15%, top 5 the same set. Expect the reference to double
+     count resumed Claude Code sessions (it dedupes per file).
+  2. Model fit "overpowered" sessions are the Opus-heavy ones in `cost --by model`.
+  3. The 1,300+ call session appears at the top with ~285k ctx/call.
+  4. `prompt-coach doctor` lists every unpriced model.
+  5. Repeat `cost` run under 5 s.
+  6. Copilot CLI: check `events.jsonl` matches the assumed shape
+     (stores/copilot_cli.py docstring), especially `requests.count`.
+- Set `[cost] currency/usd_rate/billed_fraction` in your own config.
+- Local Ollama models show as unpriced; add zero prices to silence them.
 
 ## Public (2026-10-10)
 

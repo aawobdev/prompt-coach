@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from prompt_coach.models import SourceKind
+from prompt_coach.pricing import DEFAULT_PRICES, PRICE_TABLE_DATE, Price
 
 # No default endpoint or model: any OpenAI-compatible endpoint works, and
 # guessing one (a LAN IP, a vendor) would send requests somewhere the user
@@ -86,6 +87,7 @@ ALL_STORE_KINDS = (
     SourceKind.CLAUDE_CODE.value,
     SourceKind.COPILOT.value,
     SourceKind.CODEX.value,
+    SourceKind.COPILOT_CLI.value,
 )
 
 
@@ -99,6 +101,7 @@ class StoresConfig:
     # is only used if named here. Default is all four, preserving the
     # pre-existing implicit "everything present is used" behavior.
     enabled: frozenset[str] = field(default_factory=lambda: frozenset(ALL_STORE_KINDS))
+    copilot_cli_dir: Path | None = None  # None = probe (/mnt/c, ~/.copilot)
 
 
 # "coach": today's default -- only the calibrated weak-prompt triggers fire,
@@ -153,12 +156,38 @@ class ModelFitConfig:
 
 
 @dataclass(frozen=True)
+class CostConfig:
+    """`[cost]`: turns token usage into estimated spend (DECISIONS.md 2026-10-10).
+    Defaults are neutral (USD, list price); a user who knows their billing
+    sets billed_fraction and currency."""
+
+    enabled: bool = True
+    currency: str = "USD"
+    usd_rate: float = 1.0  # USD -> currency; set by hand, never looked up (no network)
+    billed_fraction: float = 1.0  # share of list price actually billed
+    billed_fraction_by_store: dict[str, float] = field(default_factory=dict)
+    price_overrides: tuple[tuple[str, Price], ...] = ()  # from config, tried first
+    price_table_date: str = PRICE_TABLE_DATE
+    context_warn_tokens: int = 100_000
+    calls_warn: int = 100
+    idle_minutes: float = 5.0
+
+    @property
+    def prices(self) -> tuple[tuple[str, Price], ...]:
+        return self.price_overrides + DEFAULT_PRICES
+
+    def fraction_for(self, source: str) -> float:
+        return self.billed_fraction_by_store.get(source, self.billed_fraction)
+
+
+@dataclass(frozen=True)
 class Config:
     llm: LLMConfig
     stores: StoresConfig
     nudge: NudgeConfig
     model_fit: ModelFitConfig
     cache_dir: Path
+    cost: CostConfig = field(default_factory=CostConfig)
 
 
 def _config_file() -> Path:
@@ -221,6 +250,8 @@ def load_config(path: Path | None = None) -> Config:
     copilot_dir = Path(copilot_raw).expanduser() if copilot_raw else None
     codex_raw = env("CODEX_DIR", stores_cfg.get("codex_dir", ""))
     codex_dir = Path(codex_raw).expanduser() if codex_raw else None
+    copilot_cli_raw = env("COPILOT_CLI_DIR", stores_cfg.get("copilot_cli_dir", ""))
+    copilot_cli_dir = Path(copilot_cli_raw).expanduser() if copilot_cli_raw else None
     cache_dir = Path(env("CACHE_DIR", str(_cache_dir()))).expanduser()
 
     enabled_raw = env("ENABLED_STORES", "")
@@ -276,6 +307,7 @@ def load_config(path: Path | None = None) -> Config:
             copilot_dir=copilot_dir,
             codex_dir=codex_dir,
             enabled=enabled_stores,
+            copilot_cli_dir=copilot_cli_dir,
         ),
         nudge=NudgeConfig(
             mode=nudge_mode,
@@ -285,6 +317,73 @@ def load_config(path: Path | None = None) -> Config:
         ),
         model_fit=ModelFitConfig(mode=model_fit_mode),
         cache_dir=cache_dir,
+        cost=_load_cost(file_cfg.get("cost", {}), env),
+    )
+
+
+def _non_negative(name: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        raise ValueError(f"{name} must be a number, got {value!r}")
+    try:
+        number = float(value)
+    except ValueError:
+        raise ValueError(f"{name} must be a number, got {value!r}") from None
+    if number < 0:
+        raise ValueError(f"{name} must not be negative, got {value!r}")
+    return number
+
+
+def _load_cost(cost_cfg: dict, env) -> CostConfig:
+    """`[cost]` from config.toml, with PROMPT_COACH_COST_* env overrides for the
+    flat keys. Bad numbers fail here with the key named, not mid-report."""
+    defaults = CostConfig()
+
+    def num(key: str, default: float) -> float:
+        return _non_negative(f"cost.{key}", env(f"COST_{key.upper()}", cost_cfg.get(key, default)))
+
+    # `usd_to_eur` is accepted as a spelling of usd_rate (the original spec's name).
+    rate_default = cost_cfg.get("usd_to_eur", defaults.usd_rate)
+    by_store_raw = cost_cfg.get("billed_fraction_by_store", {})
+    if not isinstance(by_store_raw, dict):
+        raise ValueError("cost.billed_fraction_by_store must be a table of store -> fraction")
+    prices_raw = cost_cfg.get("prices", {})
+    if not isinstance(prices_raw, dict):
+        raise ValueError('cost.prices must be tables like [cost.prices."claude-opus*"]')
+    overrides = []
+    for pattern, fields in prices_raw.items():
+        if not isinstance(fields, dict):
+            raise ValueError(f"cost.prices.{pattern!r} must be a table")
+        missing = {"input", "output", "cache_read", "cache_write"} - set(fields)
+        if missing:
+            raise ValueError(f"cost.prices.{pattern!r} is missing {sorted(missing)}")
+        values = {k: _non_negative(f"cost.prices.{pattern!r}.{k}", v) for k, v in fields.items()}
+        overrides.append(
+            (
+                pattern,
+                Price(
+                    input=values["input"],
+                    output=values["output"],
+                    cache_read=values["cache_read"],
+                    cache_write=values["cache_write"],
+                    cache_write_1h=values.get("cache_write_1h"),
+                ),
+            )
+        )
+    return CostConfig(
+        enabled=env("COST_ENABLED", str(cost_cfg.get("enabled", True))).lower()
+        in ("1", "true", "yes"),
+        currency=str(env("COST_CURRENCY", cost_cfg.get("currency", defaults.currency))),
+        usd_rate=num("usd_rate", rate_default),
+        billed_fraction=num("billed_fraction", defaults.billed_fraction),
+        billed_fraction_by_store={
+            str(k): _non_negative(f"cost.billed_fraction_by_store.{k}", v)
+            for k, v in by_store_raw.items()
+        },
+        price_overrides=tuple(overrides),
+        price_table_date=str(cost_cfg.get("price_table_date", defaults.price_table_date)),
+        context_warn_tokens=int(num("context_warn_tokens", defaults.context_warn_tokens)),
+        calls_warn=int(num("calls_warn", defaults.calls_warn)),
+        idle_minutes=num("idle_minutes", defaults.idle_minutes),
     )
 
 
@@ -344,6 +443,8 @@ def write_config(cfg: Config, path: Path) -> None:
         lines.append(f"copilot_dir = {_toml_str(str(cfg.stores.copilot_dir))}")
     if cfg.stores.codex_dir is not None:
         lines.append(f"codex_dir = {_toml_str(str(cfg.stores.codex_dir))}")
+    if cfg.stores.copilot_cli_dir is not None:
+        lines.append(f"copilot_cli_dir = {_toml_str(str(cfg.stores.copilot_cli_dir))}")
     enabled_items = ", ".join(_toml_str(s) for s in sorted(cfg.stores.enabled))
     lines.append(f"enabled = [{enabled_items}]")
     lines += [
@@ -363,7 +464,52 @@ def write_config(cfg: Config, path: Path) -> None:
         "",
         "[model_fit]",
         f"mode = {_toml_str(cfg.model_fit.mode)}",
-        "",
     ]
+    lines += _cost_lines(cfg.cost)
+    lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.write_text("\n".join(lines))
+
+
+def _cost_lines(cost: CostConfig) -> list[str]:
+    """Only what differs from the defaults, so a config written by `setup`
+    keeps whatever [cost] the user set and nothing else."""
+    default = CostConfig()
+    flat: list[str] = []
+    for key in (
+        "enabled",
+        "currency",
+        "usd_rate",
+        "billed_fraction",
+        "price_table_date",
+        "context_warn_tokens",
+        "calls_warn",
+        "idle_minutes",
+    ):
+        value = getattr(cost, key)
+        if value == getattr(default, key):
+            continue
+        if isinstance(value, bool):
+            flat.append(f"{key} = {str(value).lower()}")
+        elif isinstance(value, str):
+            flat.append(f"{key} = {_toml_str(value)}")
+        else:
+            flat.append(f"{key} = {value}")
+    tables: list[str] = []
+    if cost.billed_fraction_by_store:
+        tables += ["", "[cost.billed_fraction_by_store]"]
+        tables += [
+            f"{_toml_str(k)} = {v}" for k, v in sorted(cost.billed_fraction_by_store.items())
+        ]
+    for pattern, price in cost.price_overrides:
+        tables += [
+            "",
+            f"[cost.prices.{_toml_str(pattern)}]",
+            f"input = {price.input}",
+            f"output = {price.output}",
+            f"cache_read = {price.cache_read}",
+            f"cache_write = {price.cache_write}",
+        ]
+        if price.cache_write_1h is not None:
+            tables.append(f"cache_write_1h = {price.cache_write_1h}")
+    return (["", "[cost]", *flat] if flat else []) + tables

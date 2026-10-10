@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-from prompt_coach.models import Prompt, PromptOrigin, SourceKind, StoreInfo
+from prompt_coach.models import Prompt, PromptOrigin, SourceKind, StoreInfo, UsageRecord
 from prompt_coach.stores.base import classify_origin, content_hash
 
 # s.model is session-level, not per-turn -- Hermes has no per-message model
@@ -216,3 +216,79 @@ class HermesStore:
             (datetime.fromtimestamp(r["started_at"], tz=UTC).date().isoformat(), r["title"])
             for r in rows
         ]
+
+    def has_usage_table(self) -> bool:
+        if not self.db_path.is_file():
+            return False
+        with self._connect() as conn:
+            return bool(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_model_usage'"
+                ).fetchone()
+            )
+
+    def iter_usage(self, since: datetime | None = None) -> Iterator[UsageRecord]:
+        """Per-session, per-model totals from `session_model_usage` (verified
+        2026-10-10). Rows with a non-empty `task` (title_generation,
+        background_review, vision, approval) and sub-agent sessions
+        (`parent_session_id` set) are overhead, folded into the parent
+        session. Hermes's own `estimated_cost_usd` (or `actual_cost_usd` when
+        recorded) is carried as the record's cost when `cost_status` says it
+        is real; otherwise the price table decides. No table: no usage."""
+        if not self.has_usage_table():
+            return
+        with self._connect() as conn:
+            sql = """
+                SELECT u.session_id, u.model, u.billing_provider, u.billing_base_url,
+                       u.billing_mode, u.task, u.api_call_count, u.input_tokens,
+                       u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
+                       u.estimated_cost_usd, u.actual_cost_usd, u.cost_status,
+                       u.first_seen, u.last_seen, s.cwd, s.parent_session_id
+                FROM session_model_usage u LEFT JOIN sessions s ON s.id = u.session_id
+            """
+            args: tuple = ()
+            if since is not None:
+                sql += " WHERE u.last_seen >= ?"
+                args = (since.timestamp(),)
+            for row in conn.execute(sql, args):
+                last = row["last_seen"] or row["first_seen"]
+                if last is None:
+                    continue
+                first = row["first_seen"] or last
+                parent = row["parent_session_id"]
+                yield UsageRecord(
+                    source=self.kind,
+                    session_id=parent or row["session_id"],
+                    record_key="|".join(
+                        str(row[k] or "")
+                        for k in (
+                            "session_id",
+                            "model",
+                            "billing_provider",
+                            "billing_base_url",
+                            "billing_mode",
+                            "task",
+                        )
+                    ),
+                    first_ts=datetime.fromtimestamp(first, tz=UTC),
+                    last_ts=datetime.fromtimestamp(last, tz=UTC),
+                    model=row["model"] or None,
+                    calls=row["api_call_count"] or 0,
+                    input_tokens=row["input_tokens"] or 0,
+                    cache_read_tokens=row["cache_read_tokens"] or 0,
+                    cache_write_tokens=row["cache_write_tokens"] or 0,
+                    output_tokens=row["output_tokens"] or 0,
+                    cwd=row["cwd"],
+                    overhead=bool(row["task"]) or bool(parent),
+                    store_cost_usd=_hermes_cost(row),
+                )
+
+
+def _hermes_cost(row: sqlite3.Row) -> float | None:
+    """Hermes's own figure when it has one: actual beats estimated. "unknown"
+    status (custom/local endpoints) means no figure -- the price table decides."""
+    if (row["actual_cost_usd"] or 0) > 0:
+        return float(row["actual_cost_usd"])
+    if row["cost_status"] == "estimated":
+        return float(row["estimated_cost_usd"] or 0.0)
+    return None

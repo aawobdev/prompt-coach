@@ -64,6 +64,24 @@ tool, and any OpenAI-compatible endpoint (or none) for the LLM features.
   `hermes -z` task specs (`TASK:`, `CARD n of n`) are machine too. Bump
   `HermesStore.parser_version` when this changes: the cache re-reads the
   store on a mismatch (a forced sync alone never rewrites cached rows).
+- **Token usage (cost layer, verified live 2026-10-10)**:
+  - Claude Code: every `type=assistant` line has `message.usage`. A streamed
+    reply is written several times with the same `requestId` (51% of 137k
+    usage lines here); key on (sessionId, requestId), last line wins (where
+    duplicates differ, the last has the final output count). A resumed
+    session copies calls into a second file with the same sessionId (1,221
+    calls here), so per-file dedupe double counts. Sub-agents write
+    `<project>/<session>/subagents/agent-*.jsonl` with the parent's
+    sessionId: overhead, folded into the parent. `cache_creation` splits
+    5-minute and 1-hour writes (1h bills at 2x input).
+  - Hermes: `session_model_usage`, one row per (session, model, provider,
+    task). `task != ''` (title_generation, background_review, vision,
+    approval) is overhead; so are sessions with `parent_session_id`, folded
+    into the parent. `estimated_cost_usd`/`actual_cost_usd` are used when
+    `cost_status` is `estimated` (custom/local endpoints say `unknown`).
+  - Copilot CLI (`~/.copilot/session-state/*/events.jsonl`): usage only,
+    **unverified** -- built from a reference parser, no data on this machine.
+  - Codex CLI, Copilot Chat, ChatGPT export, JSON import: no usage data.
 - **Never write to any source store.** All derived state lives in
   `~/.cache/prompt-coach/` and is disposable.
 

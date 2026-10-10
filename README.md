@@ -37,6 +37,7 @@ All are read-only and auto-detected; `prompt-coach discover` shows what it found
 | Codex CLI | `~/.codex/sessions/` |
 | GitHub Copilot Chat (VS Code) | VS Code `workspaceStorage/*/chatSessions/` |
 | Hermes agent | `~/.hermes/state.db` |
+| GitHub Copilot CLI | `~/.copilot/session-state/` (token usage only, for `cost`) |
 | ChatGPT | the official data export (`prompt-coach import export.zip`) |
 | Anything else | a simple JSON file (`prompt-coach import sessions.json`, format below) |
 
@@ -116,6 +117,7 @@ Tips:
 | `nudge-consume` | Internal target for the `/prompt-coach:accept` / `/prompt-coach:original` plugin skills below -- pops the pending rewrite for a session and prints one side of it. Not meant to be run by hand. |
 | `doctor` | Read-only report: is the `claude` CLI on PATH, is the plugin installed, are the legacy hooks/commands it replaces still present (`--json` for scripting). |
 | `migrate-legacy` | Installs the plugin (via `claude plugin marketplace add`/`install`) and/or removes the legacy hooks/commands, whichever is needed. Shows the plan and asks to confirm; backs up everything it touches first. `--repo` overrides auto-detection, `--dry-run` previews only, `--yes` skips confirmation. |
+| `cost` | Estimated spend from token usage, by session, folder, model, store or day (`--since`, `--by`, `--top`, `--source`, `--json`, `--plain`). See [Cost estimates](#cost-estimates) |
 | `cache sync/info/clear` | Manage the local analysis cache |
 
 ## Live nudges (optional)
@@ -226,7 +228,38 @@ see the `nudge` row above.
 4. **Report**: one markdown briefing. Delete `~/.cache/prompt-coach/` to erase
    every derived artifact.
 
-## Privacy
+## Cost estimates
+
+`prompt-coach cost` turns the token usage your tools already record into an
+estimate of what your habits cost: which sessions, folders and models the
+money goes to, and the single biggest lever (usually long sessions, since
+every call resends the whole context).
+
+| Source | Usage data |
+|---|---|
+| Claude Code | Yes, per call |
+| Hermes | Yes, per session and model (uses Hermes's own cost estimate when it has one) |
+| Copilot CLI | Yes, per session and model (format not yet verified against real files) |
+| Codex CLI, Copilot Chat, ChatGPT, JSON import | No: listed as "no usage data", never as zero |
+
+Figures are **estimates from list prices, not a bill**. Default prices cover
+current Claude models (dated in every report). A model with no price shows
+its tokens and `n/a`, never another model's price; `prompt-coach doctor`
+lists them. If your real bill is discounted, say so:
+
+```toml
+[cost]
+currency = "EUR"
+usd_rate = 0.92          # USD -> your currency, set by hand (no network lookups)
+billed_fraction = 0.7    # share of list price you're actually billed
+
+[cost.prices."deepseek-v4-flash*"]   # add or override any model, USD per million tokens
+input = 0.10
+output = 0.40
+cache_read = 0.01
+cache_write = 0.10
+```
+
 
 - Source files are opened read-only and never written. Everything derived
   lives in `~/.cache/prompt-coach/`; delete it to erase all of it.
@@ -258,9 +291,13 @@ this for you), or env vars:
   LLM's rewrite straight through instead of the self-refine directive (default false)
 - `PROMPT_COACH_HERMES_DB`, `PROMPT_COACH_CLAUDE_PROJECTS`, `PROMPT_COACH_COPILOT_DIR`,
   `PROMPT_COACH_CODEX_DIR`, `PROMPT_COACH_CACHE_DIR`
-- `PROMPT_COACH_ENABLED_STORES` - comma-separated store list (default: all four
+- `PROMPT_COACH_ENABLED_STORES` - comma-separated store list (default: all five
   live stores). Opt-in, not opt-out: a store present on disk is only used if
   named here. Equivalent to `[stores] enabled = [...]` in config.toml.
+- `[cost]` - see [Cost estimates](#cost-estimates). Flat keys also take env
+  vars: `PROMPT_COACH_COST_ENABLED`, `_CURRENCY`, `_USD_RATE`,
+  `_BILLED_FRACTION`, `_CONTEXT_WARN_TOKENS`, `_CALLS_WARN`, `_IDLE_MINUTES`.
+  `PROMPT_COACH_COPILOT_CLI_DIR` points at a Copilot CLI `session-state` folder.
 - `[nudge.dir_overrides]` in config.toml only (a mapping has no clean env-var
   form) - per-directory nudge mode, e.g. `"/home/x/scratch" = "off"`. The
   longest matching path prefix wins; falls back to the global `nudge.mode`.
