@@ -44,7 +44,13 @@ Open:
      (stores/copilot_cli.py docstring), especially `requests.count`.
 - ~~Set `[cost]` in your own config~~: done on dev 2026-10-11 (currency,
   rate and billed fraction set; `[nudge] cost_warning` on, verified live).
+- Dev nudge config changed 2026-10-11: `mode = "coach"` (was `auto`),
+  `auto_rewrite = false`. Verified by loading the config with the
+  installed build; the cost warning has not yet been seen firing in coach
+  mode.
 - Local Ollama models show as unpriced; add zero prices to silence them.
+  Doctor on dev lists ~18 unpriced models (top: `deepseek-v4-flash`, 445
+  sessions), not only Ollama ones.
 
 ## Public (2026-10-10)
 
