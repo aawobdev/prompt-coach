@@ -48,6 +48,9 @@ Open:
   `auto_rewrite = false`. Verified by loading the config with the
   installed build; the cost warning has not yet been seen firing in coach
   mode.
+- Dev nudge config changed again 2026-10-12: `mode = "hint"` (was `coach`;
+  coach blocking was too irritating). Verified by loading the config only;
+  a hint has not yet been seen firing live. `off` is the fallback.
 - Local Ollama models show as unpriced; add zero prices to silence them.
   Doctor on dev lists ~18 unpriced models (top: `deepseek-v4-flash`, 445
   sessions), not only Ollama ones.
